@@ -2,7 +2,7 @@
 
 A local macOS menu bar companion that switches between user-owned ChatGPT/Codex accounts while preserving the official app, local projects, and Codex task history.
 
-> 개인용 비공식 도구입니다. OpenAI의 공식 ChatGPT/Codex 앱을 대체하거나 수정하지 않습니다.
+> **비공식 개인용 도구입니다.** 이 프로젝트는 OpenAI와 제휴·후원·승인 관계가 없으며 공식 ChatGPT/Codex 앱을 대체하거나 수정하지 않습니다. 본인이 소유하거나 정당하게 관리 권한을 가진 계정에만 사용하세요. 계정·인증정보 공유, 자동 계정 순환, 동시 다계정 실행 또는 서비스 사용량·요금제 제한 회피 목적의 사용을 지원하거나 권장하지 않습니다. OpenAI, ChatGPT, Codex 명칭은 호환 대상 식별을 위해서만 사용됩니다.
 
 ## 주요 기능
 
@@ -35,5 +35,6 @@ open "$HOME/Applications/Codex Account Switcher.app"
 - [공개 환경 검증 결과](docs/ENVIRONMENT_REPORT.md)
 - [세션 연속성 검증](docs/SESSION_CONTINUITY_REPORT.md)
 - [문제 해결](docs/TROUBLESHOOTING.md)
+- [MIT 라이선스](LICENSE)
 
 인증 원문, 브라우저 쿠키, MFA 코드와 비공개 Keychain 항목은 읽거나 저장하지 않습니다.

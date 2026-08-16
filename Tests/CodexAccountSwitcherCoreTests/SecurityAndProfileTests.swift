@@ -105,6 +105,20 @@ final class SecurityAndProfileTests: XCTestCase {
         XCTAssertFalse(redacted.contains("user@example.com"))
         XCTAssertEqual(Redactor.maskEmail("user@example.com"), "u***@example.com")
     }
+
+    func testRedactionRemovesQuotedJSONTokenValues() {
+        let raw = #"{"access_token":"fixture-access-token-json","refresh_token": "fixture-refresh-token-json", "id_token":"fixture-id-token-json", "authorization":"Bearer fixture-bearer-token"}"#
+        let redacted = Redactor.redact(raw)
+
+        XCTAssertFalse(redacted.contains("fixture-access-token-json"))
+        XCTAssertFalse(redacted.contains("fixture-refresh-token-json"))
+        XCTAssertFalse(redacted.contains("fixture-id-token-json"))
+        XCTAssertFalse(redacted.contains("fixture-bearer-token"))
+        XCTAssertEqual(
+            redacted,
+            #"{"access_token":"[REDACTED]","refresh_token": "[REDACTED]", "id_token":"[REDACTED]", "authorization":"[REDACTED]"}"#
+        )
+    }
 }
 
 private final class CountingKeyStore: SecretKeyStore, @unchecked Sendable {

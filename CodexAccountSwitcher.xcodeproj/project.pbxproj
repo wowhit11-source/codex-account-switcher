@@ -1,0 +1,103 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXFileReference section */
+		CA0000000000000000000010 /* Package.swift */ = {isa = PBXFileReference; lastKnownFileType = text.script.swift; path = Package.swift; sourceTree = "<group>"; };
+		CA0000000000000000000011 /* Sources */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Sources; sourceTree = "<group>"; };
+		CA0000000000000000000012 /* Tests */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Tests; sourceTree = "<group>"; };
+		CA0000000000000000000013 /* scripts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = scripts; sourceTree = "<group>"; };
+		CA0000000000000000000014 /* docs */ = {isa = PBXFileReference; lastKnownFileType = folder; path = docs; sourceTree = "<group>"; };
+		CA0000000000000000000015 /* README_KO.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README_KO.md; sourceTree = "<group>"; };
+		CA0000000000000000000016 /* SECURITY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = SECURITY.md; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		CA0000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				CA0000000000000000000010 /* Package.swift */,
+				CA0000000000000000000011 /* Sources */,
+				CA0000000000000000000012 /* Tests */,
+				CA0000000000000000000013 /* scripts */,
+				CA0000000000000000000014 /* docs */,
+				CA0000000000000000000015 /* README_KO.md */,
+				CA0000000000000000000016 /* SECURITY.md */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXLegacyTarget section */
+		CA0000000000000000000002 /* Codex Account Switcher */ = {
+			isa = PBXLegacyTarget;
+			buildArgumentsString = "\"$(PROJECT_DIR)/scripts/build.sh\"";
+			buildConfigurationList = CA0000000000000000000004 /* Build configuration list for PBXLegacyTarget */;
+			buildPhases = (
+			);
+			buildToolPath = /bin/zsh;
+			buildWorkingDirectory = "$(PROJECT_DIR)";
+			dependencies = (
+			);
+			name = "Codex Account Switcher";
+			passBuildSettingsInEnvironment = 1;
+			productName = CodexAccountSwitcher;
+		};
+/* End PBXLegacyTarget section */
+
+/* Begin PBXProject section */
+		CA0000000000000000000003 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+			};
+			buildConfigurationList = CA0000000000000000000005 /* Build configuration list for PBXProject */;
+			compatibilityVersion = "Xcode 16.0";
+			developmentRegion = ko;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+				ko,
+			);
+			mainGroup = CA0000000000000000000001;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = CA0000000000000000000001;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				CA0000000000000000000002 /* Codex Account Switcher */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin XCBuildConfiguration section */
+		CA0000000000000000000020 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {SWIFT_VERSION = 6.0;}; name = Debug; };
+		CA0000000000000000000021 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {SWIFT_VERSION = 6.0;}; name = Release; };
+		CA0000000000000000000022 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {MACOSX_DEPLOYMENT_TARGET = 15.0;}; name = Debug; };
+		CA0000000000000000000023 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {MACOSX_DEPLOYMENT_TARGET = 15.0;}; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		CA0000000000000000000004 /* Build configuration list for PBXLegacyTarget */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (CA0000000000000000000020 /* Debug */, CA0000000000000000000021 /* Release */);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CA0000000000000000000005 /* Build configuration list for PBXProject */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (CA0000000000000000000022 /* Debug */, CA0000000000000000000023 /* Release */);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = CA0000000000000000000003 /* Project object */;
+}

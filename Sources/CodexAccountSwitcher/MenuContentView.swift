@@ -1,0 +1,203 @@
+import AppKit
+import CodexAccountSwitcherCore
+import SwiftUI
+
+struct MenuContentView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            header
+            Divider()
+            currentAccount
+            usage
+            Divider()
+            profiles
+            controls
+            Divider()
+            continuity
+            status
+            Divider()
+            footer
+        }
+        .padding(14)
+        .frame(width: 360)
+        .task { await model.bootstrap() }
+    }
+
+    private var header: some View {
+        HStack {
+            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                .font(.title2)
+                .foregroundStyle(.blue)
+            VStack(alignment: .leading) {
+                Text("Codex Account Switcher").font(.headline)
+                Text(model.environment?.officialApp.map { "공식 앱 \($0.shortVersion ?? "버전 미확인")" } ?? "공식 앱 확인 중")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if model.isBusy { ProgressView().controlSize(.small) }
+        }
+    }
+
+    private var currentAccount: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("현재 계정").font(.caption).foregroundStyle(.secondary)
+            if let account = model.currentAccount {
+                HStack {
+                    Circle().fill(.green).frame(width: 8, height: 8)
+                    Text(Redactor.maskEmail(account.email) ?? "이메일 없음").fontWeight(.semibold)
+                    Spacer()
+                    Text(account.planType?.capitalized ?? account.type)
+                        .font(.caption)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(.blue.opacity(0.12), in: Capsule())
+                }
+            } else {
+                Label("인증된 ChatGPT 계정 없음", systemImage: "person.crop.circle.badge.questionmark")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var usage: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("Codex 사용량").font(.caption).foregroundStyle(.secondary)
+            if let primary = model.rateLimits?.primary {
+                ProgressView(value: min(max(primary.usedPercent, 0), 100), total: 100)
+                HStack {
+                    Text("Primary 사용 \(primary.usedPercent, specifier: "%.0f")%")
+                    Spacer()
+                    if let reset = primary.resetsAt {
+                        Text("초기화 \(reset, style: .relative)")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else {
+                Text("사용량 정보 없음").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var profiles: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("등록된 계정").font(.caption).foregroundStyle(.secondary)
+            if model.profiles.isEmpty {
+                Text("등록된 프로필이 없습니다").font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(model.profiles) { profile in
+                HStack {
+                    Image(systemName: profile.isActive ? "largecircle.fill.circle" : "circle")
+                        .foregroundStyle(profile.isActive ? .green : .secondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(profile.displayName)
+                        Text([profile.planType?.capitalized, profile.maskedEmail].compactMap { $0 }.joined(separator: " · "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if !profile.isActive {
+                        Button("전환") { model.requestSwitch(to: profile) }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(model.isBusy)
+                    }
+                }
+                .contextMenu {
+                    Button("프로필 삭제", role: .destructive) { model.deleteProfile(profile) }
+                }
+            }
+        }
+    }
+
+    private var controls: some View {
+        Grid(horizontalSpacing: 8, verticalSpacing: 7) {
+            GridRow {
+                Button("현재 계정 등록") { model.captureCurrentAccount() }
+                    .disabled(model.isBusy || model.currentAccount == nil || model.profiles.count >= 2)
+                Button("계정 추가") { model.addAccount(flow: .browser) }
+                    .disabled(model.isBusy || model.profiles.count >= 2)
+            }
+            GridRow {
+                Button("Device Code 추가") { model.addAccount(flow: .deviceCode) }
+                    .disabled(model.isBusy || model.profiles.count >= 2)
+                Button("현재 계정 새로고침") { Task { await model.refreshAll() } }
+                    .disabled(model.isBusy)
+            }
+            GridRow {
+                Button("Codex 앱 열기") { model.openOfficialApp() }
+                Button("긴급 복구") { model.emergencyRestore() }
+                    .disabled(model.isBusy)
+            }
+            GridRow {
+                Button("Guided Switch") { model.guidedSwitch() }
+                    .disabled(model.isBusy)
+                Color.clear.frame(height: 1)
+            }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+
+    private var continuity: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Session Continuity Test").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                if let verdict = model.continuityRecord?.verdict {
+                    Text(verdict.rawValue)
+                        .font(.caption2.bold())
+                        .foregroundStyle(verdict == .pass ? .green : verdict == .pending ? .secondary : .orange)
+                }
+            }
+            if let record = model.continuityRecord {
+                Text(record.marker).font(.caption2.monospaced()).textSelection(.enabled)
+                HStack {
+                    Button("마커 찾기") { model.locateContinuityMarker() }
+                    Button("PASS") { model.finishContinuityTest(.pass) }
+                    Button("PARTIAL") { model.finishContinuityTest(.partial) }
+                    Button("FAIL") { model.finishContinuityTest(.fail) }
+                }
+                .controlSize(.mini)
+            } else {
+                Button("연속성 테스트 시작") { model.beginContinuityTest() }
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    private var status: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if model.isBusy && model.phase != .idle && model.phase != .completed {
+                ProgressView().controlSize(.small)
+            }
+            Text(model.statusMessage)
+                .font(.caption)
+                .foregroundStyle(model.statusMessage.contains("실패") || model.statusMessage.contains("오류") ? .red : .secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let comparison = model.lastSnapshotComparison {
+                Text("보호 파일: 삭제 \(comparison.deleted.count) · 변경 \(comparison.modified.count) · 유지 \(comparison.unchangedCount)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            Button("진단 보고서") { model.openBundledDocument("ENVIRONMENT_REPORT.md") }
+            Button("도움말") { model.openBundledDocument("TROUBLESHOOTING.md") }
+            Spacer()
+            SettingsLink { Image(systemName: "gearshape") }
+            Button {
+                NSApplication.shared.terminate(nil)
+            } label: {
+                Image(systemName: "power")
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}

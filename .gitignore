@@ -1,0 +1,25 @@
+.DS_Store
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+dist/*.app/
+dist/*.zip
+
+# Authentication material must never enter the repository.
+auth.json
+*.auth.json
+*.casprofile
+*.recovery
+*.sealed
+Profiles/
+Recovery/
+/CodexAccountSwitcher/
+
+# Local diagnostics can contain machine-specific paths.
+docs/generated/
+*.log
+HANDOFF.md
+
+# Unrelated local scratch repository.
+무제/

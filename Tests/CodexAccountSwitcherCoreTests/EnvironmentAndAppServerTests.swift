@@ -37,6 +37,30 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         XCTAssertEqual(results.filter(\.isOfficialAppProcess).map(\.pid), [100, 101])
     }
 
+    func testProcessScannerDetectsHostManagedOfficialAppAuthentication() {
+        let sample = """
+        100 1 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT
+        101 100 /Applications/ChatGPT.app/Contents/Resources/codex -c features.code_mode_host=true app-server --analytics-default-enabled
+        """
+        let scanner = CodexProcessScanner()
+        let results = scanner.parse(output: sample, officialAppPath: "/Applications/ChatGPT.app")
+
+        XCTAssertEqual(results.filter(\.usesHostManagedAuthentication).map(\.pid), [101])
+        XCTAssertEqual(scanner.officialAppAuthenticationMode(in: results), .hostManaged)
+    }
+
+    func testProcessScannerDoesNotAssumeHostManagedAuthenticationForStandardAppServer() {
+        let sample = """
+        100 1 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT
+        101 100 /Applications/ChatGPT.app/Contents/Resources/codex app-server
+        """
+        let scanner = CodexProcessScanner()
+        let results = scanner.parse(output: sample, officialAppPath: "/Applications/ChatGPT.app")
+
+        XCTAssertFalse(results.contains(where: \.usesHostManagedAuthentication))
+        XCTAssertEqual(scanner.officialAppAuthenticationMode(in: results), .standardOrUnknown)
+    }
+
     func testProcessScannerIgnoresComputerUseHelpersAndCollapsesCLIProcessTree() {
         let sample = """
         191 50 /Users/test/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient computer-history mcp

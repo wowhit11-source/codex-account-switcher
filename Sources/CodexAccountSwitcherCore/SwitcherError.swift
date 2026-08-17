@@ -5,7 +5,7 @@ public enum SwitcherError: Error, LocalizedError, Sendable {
     case invalidAuthenticationCache
     case keychain(String)
     case cryptography(String)
-    case profileLimitReached
+    case accountAlreadyRegistered(String)
     case profileNotFound
     case activeProcessConflict([String])
     case activeProcessTerminationFailed([String])
@@ -31,8 +31,8 @@ public enum SwitcherError: Error, LocalizedError, Sendable {
             return "Keychain 작업에 실패했습니다: \(message)"
         case .cryptography(let message):
             return "인증 캐시 암호화 작업에 실패했습니다: \(message)"
-        case .profileLimitReached:
-            return "초기 버전에서는 계정을 최대 두 개까지 등록할 수 있습니다."
+        case .accountAlreadyRegistered(let displayName):
+            return "로그인한 계정은 이미 \(displayName) 프로필에 등록되어 있습니다."
         case .profileNotFound:
             return "선택한 계정 프로필을 찾지 못했습니다."
         case .activeProcessConflict(let processes):

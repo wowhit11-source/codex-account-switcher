@@ -3,11 +3,20 @@ import CodexAccountSwitcherCore
 import Foundation
 import ServiceManagement
 
+enum AccountDisplayMode: Equatable {
+    case checking
+    case officialHostManaged
+    case storedAuthentication
+    case switchVerified
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var environment: EnvironmentReport?
     @Published var profiles: [AccountProfile] = []
     @Published var currentAccount: AccountIdentity?
+    @Published var storedAccount: AccountIdentity?
+    @Published var accountDisplayMode: AccountDisplayMode = .checking
     @Published var rateLimits: AccountRateLimits?
     @Published var usage: AccountUsageSummary?
     @Published var phase: SwitchPhase = .idle
@@ -35,30 +44,51 @@ final class AppModel: ObservableObject {
     func refreshAll() async {
         isBusy = true
         phase = .idle
+        accountDisplayMode = .checking
+        currentAccount = nil
+        storedAccount = nil
+        rateLimits = nil
+        usage = nil
         statusMessage = "현재 환경 확인 중"
         let report = EnvironmentInspector(paths: paths).inspect()
         environment = report
         do {
             profiles = try await profileStore.loadProfiles()
             continuityRecord = try await continuityStore.load()
-            if let client = appServerClient(from: report) {
-                currentAccount = try await client.readAccount(refreshToken: false)
+            if report.officialAppAuthenticationMode == .hostManaged {
+                if let client = appServerClient(from: report) {
+                    storedAccount = try? await client.readAccount(refreshToken: false)
+                }
+                accountDisplayMode = .officialHostManaged
+                statusMessage = "공식 앱은 호스트 관리 인증을 사용 중입니다. 현재 계정과 사용량은 공식 앱에서 확인하세요"
+                SecureLogger.info("공식 앱 호스트 관리 인증 감지: auth.json 계정을 현재 계정으로 표시하지 않음")
+            } else if let client = appServerClient(from: report) {
+                let identity = try await client.readAccount(refreshToken: false)
+                storedAccount = identity
+                currentAccount = identity
                 rateLimits = try? await client.readRateLimits()
                 usage = try? await client.readUsage()
-                try await reconcileActiveProfile()
-                statusMessage = currentAccount == nil ? "로그인이 필요합니다" : "현재 계정을 확인했습니다"
-                if let currentAccount {
+                accountDisplayMode = .storedAuthentication
+                if let identity {
+                    try await reconcileActiveProfile(using: identity)
+                }
+                statusMessage = identity == nil ? "로그인이 필요합니다" : "저장된 인증 계정을 확인했습니다"
+                if let storedAccount {
                     SecureLogger.info(
-                        "account/read 성공 email=\(Redactor.maskEmail(currentAccount.email) ?? "none") plan=\(currentAccount.planType ?? "unknown")"
+                        "account/read 성공 email=\(Redactor.maskEmail(storedAccount.email) ?? "none") plan=\(storedAccount.planType ?? "unknown")"
                     )
                 }
                 if let primary = rateLimits?.primary {
                     SecureLogger.info("account/rateLimits/read 성공 usedPercent=\(Int(primary.usedPercent))")
                 }
             } else {
+                accountDisplayMode = .storedAuthentication
                 statusMessage = "Codex App Server 실행 파일을 찾지 못했습니다"
             }
         } catch {
+            accountDisplayMode = report.officialAppAuthenticationMode == .hostManaged
+                ? .officialHostManaged
+                : .storedAuthentication
             statusMessage = Redactor.redact(error.localizedDescription)
             SecureLogger.error(statusMessage)
         }
@@ -67,22 +97,27 @@ final class AppModel: ObservableObject {
 
     func captureCurrentAccount() {
         Task {
-            guard profiles.count < 2 else {
-                statusMessage = SwitcherError.profileLimitReached.localizedDescription
-                return
-            }
-            guard let identity = currentAccount else {
-                statusMessage = "먼저 현재 계정을 새로고침하세요"
+            guard let identity = storedAccount else {
+                statusMessage = "먼저 저장된 인증을 새로고침하세요"
                 return
             }
             isBusy = true
             do {
                 let data = try Data(contentsOf: paths.authFile, options: .mappedIfSafe)
                 try AuthCacheValidator.validate(data)
+                let matchingProfile: AccountProfile?
+                if let email = identity.email {
+                    matchingProfile = try await profileStore.profile(matchingAccountEmail: email)
+                } else {
+                    matchingProfile = nil
+                }
                 let profile = AccountProfile(
-                    displayName: "\((identity.planType ?? "ChatGPT").capitalized) Account \(profiles.count + 1)",
+                    id: matchingProfile?.id ?? UUID(),
+                    displayName: matchingProfile?.displayName
+                        ?? "\((identity.planType ?? "ChatGPT").capitalized) Account \(profiles.count + 1)",
                     maskedEmail: Redactor.maskEmail(identity.email),
                     planType: identity.planType,
+                    createdAt: matchingProfile?.createdAt ?? Date(),
                     lastValidatedAt: Date(),
                     isActive: true
                 )
@@ -92,7 +127,9 @@ final class AppModel: ObservableObject {
                 )
                 try await profileStore.markActive(profile.id, identity: identity)
                 profiles = try await profileStore.loadProfiles()
-                statusMessage = "현재 계정을 암호화해 등록했습니다"
+                statusMessage = matchingProfile == nil
+                    ? "auth.json의 저장 계정을 암호화해 등록했습니다"
+                    : "auth.json에 저장된 인증을 갱신했습니다"
             } catch {
                 statusMessage = Redactor.redact(error.localizedDescription)
             }
@@ -100,17 +137,17 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func addAccount(flow: LoginFlow = .browser) {
+    func addAccount(flow: LoginFlow = .browser, replacing profile: AccountProfile? = nil) {
         Task {
             guard let report = environment, let binary = binaryURL(from: report) else {
                 statusMessage = "Codex App Server 실행 파일을 찾지 못했습니다"
                 return
             }
             isBusy = true
-            statusMessage = "공식 ChatGPT 로그인 준비 중"
+            statusMessage = profile == nil ? "공식 ChatGPT 로그인 준비 중" : "교체할 계정 로그인 준비 중"
             do {
                 let registration = AccountRegistrationService(binaryURL: binary, profileStore: profileStore)
-                _ = try await registration.register(flow: flow) { challenge in
+                let registeredProfile = try await registration.register(flow: flow, replacing: profile) { challenge in
                     await MainActor.run {
                         if let code = challenge.userCode {
                             NSPasteboard.general.clearContents()
@@ -120,16 +157,36 @@ final class AppModel: ObservableObject {
                     }
                 }
                 profiles = try await profileStore.loadProfiles()
-                statusMessage = flow == .browser
-                    ? "새 계정을 암호화해 등록했습니다"
-                    : "새 계정을 등록했습니다. Device Code는 클립보드에 복사했습니다"
-                SecureLogger.info("공식 로그인 프로필 등록 성공")
+                if let currentAccount, accountDisplayMode != .officialHostManaged {
+                    try await reconcileActiveProfile(using: currentAccount)
+                }
+                if let profile {
+                    let remainsActive = profiles.first(where: { $0.id == registeredProfile.id })?.isActive == true
+                    statusMessage = remainsActive
+                        ? "\(profile.displayName)의 저장된 인증을 갱신했습니다"
+                        : "\(profile.displayName)의 저장 계정을 변경했습니다. 적용하려면 전환을 누르세요"
+                } else {
+                    statusMessage = flow == .browser
+                        ? "계정을 암호화해 등록하거나 기존 인증을 갱신했습니다"
+                        : "계정을 등록하거나 갱신했습니다. Device Code는 클립보드에 복사했습니다"
+                }
+                SecureLogger.info(profile == nil ? "공식 로그인 프로필 등록 성공" : "공식 로그인 프로필 교체 성공")
             } catch {
                 statusMessage = Redactor.redact(error.localizedDescription)
                 SecureLogger.error(statusMessage)
             }
             isBusy = false
         }
+    }
+
+    func requestAccountChange(_ profile: AccountProfile, flow: LoginFlow) {
+        let alert = NSAlert()
+        alert.messageText = "\(profile.displayName)의 저장 계정을 변경할까요?"
+        alert.informativeText = "공식 로그인으로 새 인증을 받은 뒤 이 프로필의 암호화된 인증만 교체합니다. 현재 사용 중인 계정은 즉시 바뀌지 않으며, 완료 후 전환 버튼을 눌러 적용합니다."
+        alert.addButton(withTitle: "계정 변경")
+        alert.addButton(withTitle: "취소")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        addAccount(flow: flow, replacing: profile)
     }
 
     func requestSwitch(to profile: AccountProfile) {
@@ -192,6 +249,8 @@ final class AppModel: ObservableObject {
                 try await client.logout()
                 try await controller.launch(app)
                 currentAccount = nil
+                storedAccount = nil
+                accountDisplayMode = .officialHostManaged
                 rateLimits = nil
                 statusMessage = "공식 앱에서 원하는 계정으로 직접 로그인한 뒤 새로고침하세요"
             } catch {
@@ -348,6 +407,8 @@ final class AppModel: ObservableObject {
                     SecureLogger.info("계정 전환 단계=\(phase.rawValue)")
                 }
                 currentAccount = result.account
+                storedAccount = result.account
+                accountDisplayMode = .switchVerified
                 rateLimits = result.rateLimits
                 lastSnapshotComparison = result.snapshotChanges
                 profiles = try await profileStore.loadProfiles()
@@ -403,13 +464,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func reconcileActiveProfile() async throws {
-        guard let email = currentAccount?.email else { return }
+    private func reconcileActiveProfile(using identity: AccountIdentity) async throws {
+        guard let email = identity.email else { return }
         for profile in profiles {
             if let secret = try? await profileStore.secret(for: profile.id),
                let stored = secret.accountEmail,
-               stored.caseInsensitiveCompare(email) == .orderedSame,
-               let identity = currentAccount {
+               stored.caseInsensitiveCompare(email) == .orderedSame {
                 try await profileStore.markActive(profile.id, identity: identity)
                 profiles = try await profileStore.loadProfiles()
                 return

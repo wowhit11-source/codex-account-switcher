@@ -13,9 +13,10 @@ public final class AccountSwitchCoordinator {
     private let officialApp: OfficialAppInfo
     private let profileStore: EncryptedProfileStore
     private let accountProbe: any AccountProbing
-    private let appController: OfficialAppController
-    private let processScanner: CodexProcessScanner
+    private let appController: any OfficialAppControlling
+    private let processScanner: any CodexProcessScanning
     private let processController: CodexProcessController
+    private let preflight: any AccountSwitchPreflighting
     private let snapshotter: SessionSnapshotter
     private let recoveryStore: RecoveryStore
     private let writer: AtomicFileWriter
@@ -25,9 +26,10 @@ public final class AccountSwitchCoordinator {
         officialApp: OfficialAppInfo,
         profileStore: EncryptedProfileStore,
         accountProbe: any AccountProbing,
-        appController: OfficialAppController = OfficialAppController(),
-        processScanner: CodexProcessScanner = CodexProcessScanner(),
+        appController: any OfficialAppControlling = OfficialAppController(),
+        processScanner: any CodexProcessScanning = CodexProcessScanner(),
         processController: CodexProcessController? = nil,
+        preflight: (any AccountSwitchPreflighting)? = nil,
         snapshotter: SessionSnapshotter? = nil,
         recoveryStore: RecoveryStore? = nil,
         writer: AtomicFileWriter = AtomicFileWriter()
@@ -39,6 +41,12 @@ public final class AccountSwitchCoordinator {
         self.appController = appController
         self.processScanner = processScanner
         self.processController = processController ?? CodexProcessController(scanner: processScanner)
+        self.preflight = preflight ?? AccountSwitchPreflight(
+            paths: paths,
+            officialApp: officialApp,
+            processScanner: processScanner,
+            accountProbe: accountProbe
+        )
         self.snapshotter = snapshotter ?? SessionSnapshotter(codexHome: paths.codexHome)
         self.recoveryStore = recoveryStore ?? RecoveryStore(paths: paths)
         self.writer = writer
@@ -75,6 +83,9 @@ public final class AccountSwitchCoordinator {
                 }
             }
 
+            onPhase(.checkingAuthenticationSource)
+            try await preflight.validateBeforeSwitch()
+
             onPhase(.snapshottingSessions)
             let before = try snapshotter.capture()
             let targetSecret = try await profileStore.secret(for: targetProfileID)
@@ -101,7 +112,7 @@ public final class AccountSwitchCoordinator {
             }
 
             onPhase(.quittingOfficialApp)
-            let didQuit = await appController.requestNormalQuit(officialApp)
+            let didQuit = await appController.requestNormalQuit(officialApp, timeout: 15)
             if !didQuit {
                 guard forceQuitApproved else { throw SwitcherError.forceQuitApprovalRequired }
                 try appController.forceQuit(officialApp, userApproved: true)
@@ -113,6 +124,7 @@ public final class AccountSwitchCoordinator {
 
             onPhase(.backingUpAuthentication)
             try recoveryStore.createBackup(from: previousAuthentication)
+            let quiescentBefore = try snapshotter.capture(mode: .metadataOnly)
 
             onPhase(.replacingAuthentication)
             try writer.write(targetSecret.authCache, to: paths.authFile)
@@ -128,12 +140,25 @@ public final class AccountSwitchCoordinator {
             try verify(identity: targetIdentity, matches: targetSecret)
             try await profileStore.markActive(targetProfileID, identity: targetIdentity)
 
+            onPhase(.verifyingAuthenticationIsolation)
+            let quiescentAfter = try snapshotter.capture(mode: .metadataOnly)
+            let isolationComparison = snapshotter.compare(quiescentBefore, quiescentAfter)
+            guard isolationComparison.isUnchanged else {
+                let changedPaths = (
+                    isolationComparison.deleted
+                        + isolationComparison.modified
+                        + isolationComparison.added
+                ).sorted()
+                throw SwitcherError.protectedStateChangedDuringSwitch(changedPaths)
+            }
+
             onPhase(.relaunchingOfficialApp)
             try await appController.launch(officialApp)
             try? await Task.sleep(for: .seconds(1))
             guard appController.isRunning(officialApp) else {
                 throw SwitcherError.fileOperation("공식 앱 재실행을 확인하지 못했습니다")
             }
+            try await preflight.validateAfterLaunch()
 
             onPhase(.verifyingSessionProtection)
             let after = try snapshotter.capture()
@@ -149,7 +174,9 @@ public final class AccountSwitchCoordinator {
             guard authenticationChanged, let previousAuthentication else { throw error }
             onPhase(.rollingBack)
             do {
-                _ = await appController.requestNormalQuit(officialApp, timeout: 5)
+                guard await appController.requestNormalQuit(officialApp, timeout: 5) else {
+                    throw SwitcherError.officialAppQuitTimedOut
+                }
                 try writer.write(previousAuthentication, to: paths.authFile)
                 guard try writer.permissions(of: paths.authFile) == 0o600 else {
                     throw SwitcherError.fileOperation("롤백된 인증 파일 권한이 0600이 아닙니다")
@@ -160,6 +187,9 @@ public final class AccountSwitchCoordinator {
                     try await profileStore.clearActiveProfile()
                 }
                 try await appController.launch(officialApp)
+                guard appController.isRunning(officialApp) else {
+                    throw SwitcherError.fileOperation("롤백 후 공식 앱 재실행을 확인하지 못했습니다")
+                }
                 if previousIdentity != nil {
                     guard let restored = try await accountProbe.readAccount(refreshToken: false) else {
                         throw SwitcherError.accountVerificationFailed("롤백 후 계정이 인증되지 않았습니다")
@@ -180,9 +210,14 @@ public final class AccountSwitchCoordinator {
     }
 
     public func emergencyRestore() async throws {
-        _ = await appController.requestNormalQuit(officialApp, timeout: 10)
+        guard await appController.requestNormalQuit(officialApp, timeout: 10) else {
+            throw SwitcherError.officialAppQuitTimedOut
+        }
         try recoveryStore.restoreLatest()
         try await appController.launch(officialApp)
+        guard appController.isRunning(officialApp) else {
+            throw SwitcherError.fileOperation("긴급 복구 후 공식 앱 재실행을 확인하지 못했습니다")
+        }
         guard try await accountProbe.readAccount(refreshToken: false) != nil else {
             throw SwitcherError.accountVerificationFailed("긴급 복구 후 계정을 확인하지 못했습니다")
         }

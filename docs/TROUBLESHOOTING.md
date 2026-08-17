@@ -32,7 +32,9 @@ Keychain이 잠겨 있거나 앱 서명/사용자 세션 문제일 수 있습니
 
 ## 공식 앱이 auth.json 전환을 무시함
 
-데스크톱 호스트가 자체 `chatgptAuthTokens`를 주입하는 버전일 수 있습니다. 공식 앱을 패치하거나 private Keychain 토큰을 복사하지 마세요. 공식 로그아웃 → 사용자가 계정 B 로그인 → 공식 앱 재실행 순서의 Guided Switch만 사용하고, Continuity Test에서 실제 계정과 동일 thread 후속 실행을 확인하세요.
+데스크톱 호스트가 자체 `chatgptAuthTokens`를 주입하는 버전일 수 있습니다. 이 모드에서는 프로필의 `전환` 버튼이 비활성화됩니다. 공식 앱을 패치하거나 private Keychain 토큰을 복사하지 마세요. `Guided Switch`로 공식 앱을 연 뒤 앱의 계정 메뉴에서 직접 로그아웃하고 원하는 계정으로 로그인하세요. 이후 Continuity Test에서 실제 계정과 동일 thread 후속 실행을 확인하세요.
+
+`cli_auth_credentials_store = "keyring"`이거나 알 수 없는 값이면 같은 이유로 원클릭 전환을 차단합니다. `file`, `auto`, 미설정 환경은 유효한 `auth.json`과 새 App Server의 실제 계정 응답이 모두 확인될 때만 허용됩니다.
 
 ## Session Continuity가 PARTIAL 또는 FAIL
 

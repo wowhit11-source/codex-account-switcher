@@ -42,6 +42,25 @@ final class AtomicSnapshotAndRecoveryTests: XCTestCase {
         XCTAssertEqual(changed.modified, ["sessions/2026/08/session.jsonl"])
     }
 
+    func testMetadataSnapshotDetectsProtectedMutationWithoutHashingContents() throws {
+        let root = try TestFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = TestFixtures.paths(root: root)
+        try TestFixtures.populateSharedState(paths)
+        let snapshotter = SessionSnapshotter(codexHome: paths.codexHome)
+        let session = paths.codexHome.appending(path: "sessions/2026/08/session.jsonl")
+        let before = try snapshotter.capture(mode: .metadataOnly)
+
+        try Data("session-mutated".utf8).write(to: session)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(2)],
+            ofItemAtPath: session.path
+        )
+
+        let comparison = snapshotter.compare(before, try snapshotter.capture(mode: .metadataOnly))
+        XCTAssertTrue(comparison.modified.contains("sessions/2026/08/session.jsonl"))
+    }
+
     func testRecoveryStoreRollsAuthenticationBack() throws {
         let root = try TestFixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

@@ -108,12 +108,14 @@ public enum SwitchPhase: String, Codable, Sendable, CaseIterable {
     case idle
     case checkingProcesses
     case closingConflictingProcesses
+    case checkingAuthenticationSource
     case snapshottingSessions
     case savingCurrentAccount
     case quittingOfficialApp
     case backingUpAuthentication
     case replacingAuthentication
     case validatingAccount
+    case verifyingAuthenticationIsolation
     case relaunchingOfficialApp
     case verifyingSessionProtection
     case rollingBack

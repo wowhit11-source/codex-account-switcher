@@ -1,5 +1,7 @@
 # Codex Account Switcher
 
+[![macOS CI](https://github.com/wowhit11-source/codex-account-switcher/actions/workflows/ci.yml/badge.svg)](https://github.com/wowhit11-source/codex-account-switcher/actions/workflows/ci.yml)
+
 A local macOS menu bar companion that switches between user-owned ChatGPT/Codex accounts while preserving the official app, local projects, and Codex task history.
 
 > **비공식 개인용 도구입니다.** 이 프로젝트는 OpenAI와 제휴·후원·승인 관계가 없으며 공식 ChatGPT/Codex 앱을 대체하거나 수정하지 않습니다. 본인이 소유하거나 정당하게 관리 권한을 가진 계정에만 사용하세요. 계정·인증정보 공유, 자동 계정 순환, 동시 다계정 실행 또는 서비스 사용량·요금제 제한 회피 목적의 사용을 지원하거나 권장하지 않습니다. OpenAI, ChatGPT, Codex 명칭은 호환 대상 식별을 위해서만 사용됩니다.
@@ -11,8 +13,9 @@ A local macOS menu bar companion that switches between user-owned ChatGPT/Codex 
 - 공식 Codex App Server 로그인 흐름으로 여러 계정 등록·변경
 - AES-GCM 암호화 프로필과 macOS Keychain 256비트 키
 - 사용자 승인형 CLI 종료 후 원자적 인증 전환
+- 파일 기반 인증 runtime preflight와 host-managed/keyring 안전 차단
 - 공식 앱 정상 종료·재실행
-- 세션·히스토리·설정·skills 보호 스냅샷과 실패 시 자동 롤백
+- 인증 교체 구간 무변경 검사, 세션 보호 스냅샷과 coordinator 자동 롤백
 - 공식 App Server 기반 사용량·초기화 시각 표시
 - 같은 task의 대화 맥락과 후속 작업 연속성 검증
 

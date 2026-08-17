@@ -63,15 +63,17 @@
 | 인증만 교체하고 로컬 상태 공유 | 자동 테스트와 실제 전환에서 확인 |
 | 동일 task 후속 작업 | 실제 두 계정 전환에서 확인 |
 
-공식 앱이 향후 host-managed token만 사용해 공유 `auth.json`을 무시한다면 원클릭 전환을 성공으로 표시하지 않고 Guided Switch로 제한해야 합니다.
+공식 앱이 host-managed token을 사용하거나 공유 `auth.json`을 무시하면 원클릭 전환을 비활성화합니다. 재실행 뒤 host-managed 모드가 새로 나타나도 성공으로 처리하지 않고 자동 롤백합니다.
 
 ## 빌드·런타임 검증
 
 | 검증 | 결과 |
 |---|---|
-| `scripts/test.sh` | 24 tests, 0 failures |
+| `scripts/test.sh` | 40 tests, 0 failures |
 | 가짜 `CODEX_HOME` 10회 전환 | 통과 |
-| 중간 실패 자동 롤백 | 통과 |
+| coordinator 대상 검증·재실행·세션 삭제 실패 자동 롤백 | 통과 |
+| 인증 교체 조용한 구간 보호 상태 무변경 검사 | 통과 |
+| 롤백 시 앱 종료 실패에서 인증 재기록 금지 | 통과 |
 | wrapper/native CLI 종료 흐름 | 통과 |
 | Keychain 원본 조회 중복 방지 | 통과 |
 | `scripts/build.sh` Release | 통과 |

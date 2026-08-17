@@ -105,6 +105,116 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         XCTAssertTrue(message?.contains("exit 또는 Ctrl+C") == true)
     }
 
+    func testOneClickAvailabilityRejectsHostManagedAndKeyringAuthentication() {
+        let hostManaged = AccountSwitchPreflightPolicy.evaluate(
+            credentialsStoreSetting: "file",
+            authFileExists: true,
+            officialAppAuthenticationMode: .hostManaged,
+            runtimeIdentityAvailable: true
+        )
+        let keyring = AccountSwitchPreflightPolicy.evaluate(
+            credentialsStoreSetting: "keyring",
+            authFileExists: true,
+            officialAppAuthenticationMode: .standardOrUnknown,
+            runtimeIdentityAvailable: true
+        )
+
+        XCTAssertFalse(hostManaged.isAvailable)
+        XCTAssertTrue(hostManaged.reason?.contains("호스트 관리 인증") == true)
+        XCTAssertFalse(keyring.isAvailable)
+        XCTAssertTrue(keyring.reason?.contains("keyring") == true)
+    }
+
+    func testOneClickAvailabilityAllowsVerifiedAutoOrUnspecifiedFileAuthentication() {
+        for setting in ["auto", nil] as [String?] {
+            let availability = AccountSwitchPreflightPolicy.evaluate(
+                credentialsStoreSetting: setting,
+                authFileExists: true,
+                officialAppAuthenticationMode: .notRunning,
+                runtimeIdentityAvailable: true
+            )
+            XCTAssertTrue(availability.isAvailable)
+        }
+
+        let unverified = AccountSwitchPreflightPolicy.evaluate(
+            credentialsStoreSetting: nil,
+            authFileExists: true,
+            officialAppAuthenticationMode: .notRunning,
+            runtimeIdentityAvailable: false
+        )
+        XCTAssertFalse(unverified.isAvailable)
+    }
+
+    func testAccountSwitchPreflightAllowsRuntimeVerifiedUnspecifiedFileAuthentication() async throws {
+        let root = try TestFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = TestFixtures.paths(root: root)
+        try TestFixtures.populateSharedState(paths)
+        try AtomicFileWriter().write(TestFixtures.authentication("verified"), to: paths.authFile)
+        let preflight = AccountSwitchPreflight(
+            paths: paths,
+            officialApp: Self.testOfficialApp,
+            processScanner: StaticAuthenticationProcessScanner(),
+            accountProbe: StaticAuthenticationProbe(identity: Self.testIdentity)
+        )
+
+        try await preflight.validateBeforeSwitch()
+    }
+
+    func testAccountSwitchPreflightRejectsConfiguredKeyring() async throws {
+        let root = try TestFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = TestFixtures.paths(root: root)
+        try TestFixtures.populateSharedState(paths)
+        try Data("cli_auth_credentials_store = \"keyring\"\n".utf8)
+            .write(to: paths.codexHome.appending(path: "config.toml"))
+        try AtomicFileWriter().write(TestFixtures.authentication("keyring"), to: paths.authFile)
+        let preflight = AccountSwitchPreflight(
+            paths: paths,
+            officialApp: Self.testOfficialApp,
+            processScanner: StaticAuthenticationProcessScanner(),
+            accountProbe: StaticAuthenticationProbe(identity: Self.testIdentity)
+        )
+
+        do {
+            try await preflight.validateBeforeSwitch()
+            XCTFail("keyring 설정은 파일 기반 원클릭 전환을 허용하면 안 됩니다")
+        } catch SwitcherError.oneClickSwitchUnavailable(let reason) {
+            XCTAssertTrue(reason.contains("keyring"))
+        }
+    }
+
+    func testAccountSwitchPreflightRejectsHostManagedAppBeforeAndAfterLaunch() async throws {
+        let root = try TestFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = TestFixtures.paths(root: root)
+        try TestFixtures.populateSharedState(paths)
+        try AtomicFileWriter().write(TestFixtures.authentication("host-managed"), to: paths.authFile)
+        let hostManaged = ProcessSummary(
+            pid: 101,
+            parentPID: 100,
+            executable: Self.testOfficialApp.bundledCodexPath ?? "codex",
+            isOfficialAppProcess: true,
+            blocksSwitch: false,
+            usesHostManagedAuthentication: true
+        )
+        let preflight = AccountSwitchPreflight(
+            paths: paths,
+            officialApp: Self.testOfficialApp,
+            processScanner: StaticAuthenticationProcessScanner(processes: [hostManaged]),
+            accountProbe: StaticAuthenticationProbe(identity: Self.testIdentity)
+        )
+
+        for validation in [preflight.validateBeforeSwitch, preflight.validateAfterLaunch] {
+            do {
+                try await validation()
+                XCTFail("호스트 관리 인증은 원클릭 전환을 허용하면 안 됩니다")
+            } catch SwitcherError.oneClickSwitchUnavailable(let reason) {
+                XCTAssertTrue(reason.contains("호스트 관리"))
+            }
+        }
+    }
+
     func testProcessControllerInterruptsWrapperThenTerminatesExposedNativeChild() async throws {
         let wrapper = ProcessSummary(
             pid: 300,
@@ -220,6 +330,41 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         let parsed = try CodexAppServerClient.parseRateLimits(rates)
         XCTAssertEqual(parsed?.primary?.usedPercent, 74)
         XCTAssertEqual(parsed?.primary?.windowDurationMinutes, 1_008)
+    }
+
+    private static let testOfficialApp = OfficialAppInfo(
+        path: "/Applications/Codex.app",
+        bundleIdentifier: "com.openai.codex",
+        shortVersion: "test",
+        buildVersion: "test",
+        bundledCodexPath: "/Applications/Codex.app/Contents/Resources/codex"
+    )
+
+    private static let testIdentity = AccountIdentity(
+        type: "chatgpt",
+        email: "user@example.com",
+        planType: "pro",
+        requiresOpenAIAuth: true
+    )
+}
+
+private struct StaticAuthenticationProcessScanner: CodexProcessScanning {
+    var processes: [ProcessSummary] = []
+
+    func scan(officialAppPath: String?) throws -> [ProcessSummary] {
+        processes
+    }
+}
+
+private struct StaticAuthenticationProbe: AccountProbing {
+    var identity: AccountIdentity?
+
+    func readAccount(refreshToken: Bool) async throws -> AccountIdentity? {
+        identity
+    }
+
+    func readRateLimits() async throws -> AccountRateLimits? {
+        nil
     }
 }
 

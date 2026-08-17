@@ -24,6 +24,7 @@ final class AppModel: ObservableObject {
     @Published var isBusy = false
     @Published var continuityRecord: ContinuityTestRecord?
     @Published var lastSnapshotComparison: SnapshotComparison?
+    @Published var oneClickSwitchAvailability = OneClickSwitchAvailability.unavailable("환경 확인 중")
 
     let paths = SwitcherPaths()
     let profileStore: EncryptedProfileStore
@@ -49,6 +50,7 @@ final class AppModel: ObservableObject {
         storedAccount = nil
         rateLimits = nil
         usage = nil
+        oneClickSwitchAvailability = .unavailable("환경 확인 중")
         statusMessage = "현재 환경 확인 중"
         let report = EnvironmentInspector(paths: paths).inspect()
         environment = report
@@ -92,6 +94,12 @@ final class AppModel: ObservableObject {
             statusMessage = Redactor.redact(error.localizedDescription)
             SecureLogger.error(statusMessage)
         }
+        oneClickSwitchAvailability = AccountSwitchPreflightPolicy.evaluate(
+            credentialsStoreSetting: report.credentialsStoreSetting,
+            authFileExists: report.authFileExists,
+            officialAppAuthenticationMode: report.officialAppAuthenticationMode,
+            runtimeIdentityAvailable: storedAccount != nil
+        )
         isBusy = false
     }
 
@@ -190,6 +198,12 @@ final class AppModel: ObservableObject {
     }
 
     func requestSwitch(to profile: AccountProfile) {
+        guard oneClickSwitchAvailability.isAvailable else {
+            statusMessage = SwitcherError.oneClickSwitchUnavailable(
+                oneClickSwitchAvailability.reason ?? "인증 저장 방식을 확인할 수 없습니다."
+            ).localizedDescription
+            return
+        }
         let alert = NSAlert()
         alert.messageText = "\(profile.displayName) 계정으로 전환할까요?"
         alert.informativeText = "공식 ChatGPT/Codex 앱을 정상 종료한 뒤 인증 캐시만 교체하고 다시 실행합니다. 별도 Codex CLI가 열려 있으면 종료 승인을 한 번 더 요청합니다."
@@ -222,17 +236,22 @@ final class AppModel: ObservableObject {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         Task {
-            guard
-                let report = environment,
-                let app = report.officialApp,
-                let client = appServerClient(from: report)
-            else {
-                statusMessage = "공식 앱 또는 App Server를 찾지 못했습니다"
+            guard let report = environment, let app = report.officialApp else {
+                statusMessage = "공식 앱을 찾지 못했습니다"
                 return
             }
             isBusy = true
             var madeBackup = false
             do {
+                if report.officialAppAuthenticationMode == .hostManaged {
+                    try await OfficialAppController().open(app)
+                    statusMessage = "공식 앱의 계정 메뉴에서 직접 로그아웃하거나 원하는 계정으로 로그인하세요"
+                    isBusy = false
+                    return
+                }
+                guard let client = appServerClient(from: report) else {
+                    throw SwitcherError.appServer("Codex App Server 실행 파일을 찾지 못했습니다")
+                }
                 let blockers = try CodexProcessScanner().scan(officialAppPath: app.path)
                     .filter(\.blocksSwitch)
                     .map(\.safeDescription)
@@ -412,6 +431,7 @@ final class AppModel: ObservableObject {
                 rateLimits = result.rateLimits
                 lastSnapshotComparison = result.snapshotChanges
                 profiles = try await profileStore.loadProfiles()
+                oneClickSwitchAvailability = .available
                 statusMessage = result.snapshotChanges.modified.isEmpty
                     ? "계정 전환 및 세션 보호 확인 완료"
                     : "계정은 전환됐고 보호 파일 변경 \(result.snapshotChanges.modified.count)건을 기록했습니다"
@@ -455,6 +475,11 @@ final class AppModel: ObservableObject {
                     statusMessage = "CLI 세션을 유지하고 계정 전환을 취소했습니다"
                 }
                 return
+            } catch SwitcherError.oneClickSwitchUnavailable(let reason) {
+                phase = .idle
+                oneClickSwitchAvailability = .unavailable(reason)
+                statusMessage = SwitcherError.oneClickSwitchUnavailable(reason).localizedDescription
+                SecureLogger.error(statusMessage)
             } catch {
                 phase = .idle
                 statusMessage = Redactor.redact(error.localizedDescription)
@@ -498,12 +523,14 @@ extension SwitchPhase {
         case .idle: "대기 중"
         case .checkingProcesses: "실행 중인 Codex 작업 확인 중"
         case .closingConflictingProcesses: "승인된 Codex CLI 정상 종료 중"
+        case .checkingAuthenticationSource: "인증 저장 방식 확인 중"
         case .snapshottingSessions: "세션 보호 스냅샷 생성 중"
         case .savingCurrentAccount: "현재 계정 저장 중"
         case .quittingOfficialApp: "공식 앱 종료 중"
         case .backingUpAuthentication: "긴급복구 백업 생성 중"
         case .replacingAuthentication: "인증 교체 중"
         case .validatingAccount: "새 계정 검증 중"
+        case .verifyingAuthenticationIsolation: "인증 외 보호 상태 불변 확인 중"
         case .relaunchingOfficialApp: "공식 앱 재실행 중"
         case .verifyingSessionProtection: "세션 보호 상태 확인 중"
         case .rollingBack: "이전 인증으로 자동 롤백 중"

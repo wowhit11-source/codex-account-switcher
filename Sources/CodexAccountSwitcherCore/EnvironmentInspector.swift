@@ -379,13 +379,7 @@ public struct EnvironmentInspector: Sendable {
     }
 
     private func credentialsStoreSetting(_ config: URL) -> String? {
-        guard let text = try? String(contentsOf: config, encoding: .utf8) else { return nil }
-        let pattern = #"(?m)^\s*cli_auth_credentials_store\s*=\s*([^#\n]+)"#
-        guard let range = text.range(of: pattern, options: .regularExpression) else { return nil }
-        let line = text[range]
-        return line.split(separator: "=", maxSplits: 1).last?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        CodexCredentialsStoreMode.configuredValue(at: config)
     }
 
     private func protectedStatePaths() -> [String] {

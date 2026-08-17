@@ -122,6 +122,14 @@ struct MenuContentView: View {
     private var profiles: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text("등록된 계정").font(.caption).foregroundStyle(.secondary)
+            if !model.oneClickSwitchAvailability.isAvailable,
+               model.oneClickSwitchAvailability.reason != "환경 확인 중",
+               let reason = model.oneClickSwitchAvailability.reason {
+                Label(reason, systemImage: "exclamationmark.shield")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if model.profiles.isEmpty {
                 Text("등록된 프로필이 없습니다").font(.caption).foregroundStyle(.secondary)
             } else if model.profiles.count <= 3 {
@@ -161,10 +169,20 @@ struct MenuContentView: View {
             }
             Spacer()
             if !isVerifiedActive {
-                Button("전환") { model.requestSwitch(to: profile) }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(model.isBusy)
+                if model.oneClickSwitchAvailability.isAvailable {
+                    Button("전환") { model.requestSwitch(to: profile) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(model.isBusy)
+                } else {
+                    Text("원클릭 불가")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(.orange.opacity(0.12), in: Capsule())
+                        .help(model.oneClickSwitchAvailability.reason ?? "원클릭 전환을 사용할 수 없습니다")
+                }
             }
             Menu {
                 Button("브라우저로 계정 변경") { model.requestAccountChange(profile, flow: .browser) }

@@ -4,6 +4,8 @@ Codex Account Switcher는 macOS 메뉴바에서 **사용자가 직접 선택한 
 
 공식 앱 번들, 바이너리, 코드 서명, 자동 업데이트 파일은 수정하지 않습니다. 브라우저 쿠키나 공식 앱의 비공개 Keychain 항목도 읽지 않습니다.
 
+> **지원 환경:** macOS 15 이상이 설치된 **Apple Silicon(arm64) Mac 전용**입니다. 현재 빌드와 실환경 검증은 Apple Silicon에서만 완료했으며 Intel Mac(x86_64)은 지원하거나 검증하지 않았습니다.
+
 ## 현재 확인 상태
 
 - macOS 15 이상, Apple Silicon 환경에서 빌드 및 자동 테스트 완료
@@ -12,13 +14,13 @@ Codex Account Switcher는 macOS 메뉴바에서 **사용자가 직접 선택한 
 - 현재 설치 환경의 `~/.codex/auth.json` 파일 기반 인증과 권한 `0600` 확인 완료
 - 가짜 `CODEX_HOME`에서 인증만 바꾸는 10회 전환, 공유 상태 해시 불변, 실패 복구 확인 완료
 - 실제 두 계정 사이의 전환, 공식 앱 재실행, 동일 task 대화 맥락 유지와 후속 코드 작업 확인 완료
-- 전체 자동 테스트 24개 통과
+- 전체 자동 테스트 29개 통과
 
 자세한 실환경 결과는 [환경 진단](docs/ENVIRONMENT_REPORT.md)과 [세션 연속성 보고서](docs/SESSION_CONTINUITY_REPORT.md)를 확인하세요.
 
 ## 빌드
 
-요구 사항은 macOS 15 이상, Xcode 26 또는 Swift 6 도구체인입니다. 외부 패키지는 사용하지 않습니다.
+요구 사항은 macOS 15 이상이 설치된 Apple Silicon(arm64) Mac과 Xcode 26 또는 Swift 6 도구체인입니다. 외부 패키지는 사용하지 않습니다.
 
 ```bash
 ./scripts/test.sh

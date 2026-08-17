@@ -49,21 +49,317 @@ final class IntegrationSwitchTests: XCTestCase {
         XCTAssertFalse(persistedLog.contains("Bearer hidden"))
     }
 
-    func testMidSwitchFailureRestoresPreviousAuthentication() throws {
-        let root = try TestFixtures.temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let paths = TestFixtures.paths(root: root)
-        let vault = CryptoVault(keyStore: MemoryKeyStore())
-        let recovery = RecoveryStore(paths: paths, vault: vault)
-        let original = TestFixtures.authentication("account-a")
-        try AtomicFileWriter().write(original, to: paths.authFile)
-        try recovery.createBackup(from: original)
+    @MainActor
+    func testCoordinatorRestoresPreviousAuthenticationWhenTargetVerificationFails() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let probe = SequenceAccountProbe(results: [fixture.identityA, nil, fixture.identityA])
+        let appController = FakeOfficialAppController()
+        let coordinator = makeCoordinator(fixture: fixture, probe: probe, appController: appController)
+        var phases: [SwitchPhase] = []
 
-        try AtomicFileWriter().write(TestFixtures.authentication("account-b"), to: paths.authFile)
-        let simulatedVerificationSucceeded = false
-        if !simulatedVerificationSucceeded {
-            try recovery.restoreLatest()
+        do {
+            _ = try await coordinator.switchAccount(to: fixture.accountB.id) { phases.append($0) }
+            XCTFail("대상 계정 검증 실패에서 전환이 성공하면 안 됩니다")
+        } catch SwitcherError.accountVerificationFailed {
+            // Expected after a successful rollback.
         }
-        XCTAssertEqual(try Data(contentsOf: paths.authFile), original)
+
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.authFile), fixture.authenticationA)
+        let activeProfile = try await fixture.store.loadProfiles().first(where: \.isActive)
+        XCTAssertEqual(activeProfile?.id, fixture.accountA.id)
+        XCTAssertTrue(phases.contains(.rollingBack))
+        XCTAssertEqual(appController.launchCount, 1)
+    }
+
+    @MainActor
+    func testCoordinatorRestoresPreviousAuthenticationWhenOfficialAppRelaunchFails() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let probe = SequenceAccountProbe(results: [fixture.identityA, fixture.identityB, fixture.identityA])
+        let appController = FakeOfficialAppController(failedLaunchCalls: [1])
+        let coordinator = makeCoordinator(fixture: fixture, probe: probe, appController: appController)
+
+        do {
+            _ = try await coordinator.switchAccount(to: fixture.accountB.id) { _ in }
+            XCTFail("공식 앱 재실행 실패에서 전환이 성공하면 안 됩니다")
+        } catch FakeCoordinatorError.launchFailed {
+            // Expected after a successful rollback and second launch.
+        }
+
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.authFile), fixture.authenticationA)
+        let activeProfile = try await fixture.store.loadProfiles().first(where: \.isActive)
+        XCTAssertEqual(activeProfile?.id, fixture.accountA.id)
+        XCTAssertEqual(appController.launchCount, 2)
+        XCTAssertTrue(appController.isRunning(fixture.officialApp))
+    }
+
+    @MainActor
+    func testCoordinatorRollsAuthenticationBackWhenProtectedSessionIsDeleted() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let protectedSession = fixture.paths.codexHome.appending(path: "sessions/2026/08/session.jsonl")
+        let probe = SequenceAccountProbe(results: [fixture.identityA, fixture.identityB, fixture.identityA])
+        let appController = FakeOfficialAppController { launchCall in
+            if launchCall == 1 {
+                try FileManager.default.removeItem(at: protectedSession)
+            }
+        }
+        let coordinator = makeCoordinator(fixture: fixture, probe: probe, appController: appController)
+
+        do {
+            _ = try await coordinator.switchAccount(to: fixture.accountB.id) { _ in }
+            XCTFail("보호 세션 삭제를 성공으로 처리하면 안 됩니다")
+        } catch SwitcherError.sessionFilesMissing(let paths) {
+            XCTAssertTrue(paths.contains("sessions/2026/08/session.jsonl"))
+        }
+
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.authFile), fixture.authenticationA)
+        let activeProfile = try await fixture.store.loadProfiles().first(where: \.isActive)
+        XCTAssertEqual(activeProfile?.id, fixture.accountA.id)
+    }
+
+    @MainActor
+    func testCoordinatorRejectsProtectedMutationDuringAuthenticationOnlyWindow() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let protectedSession = fixture.paths.codexHome.appending(path: "sessions/2026/08/session.jsonl")
+        let probe = SequenceAccountProbe(
+            results: [fixture.identityA, fixture.identityB, fixture.identityA],
+            onRead: { call in
+                if call == 2 {
+                    try Data("unexpected-session-mutation".utf8).write(to: protectedSession)
+                }
+            }
+        )
+        let appController = FakeOfficialAppController()
+        let coordinator = makeCoordinator(fixture: fixture, probe: probe, appController: appController)
+
+        do {
+            _ = try await coordinator.switchAccount(to: fixture.accountB.id) { _ in }
+            XCTFail("인증 교체 구간의 보호 상태 변경을 성공으로 처리하면 안 됩니다")
+        } catch SwitcherError.protectedStateChangedDuringSwitch(let paths) {
+            XCTAssertTrue(paths.contains("sessions/2026/08/session.jsonl"))
+        }
+
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.authFile), fixture.authenticationA)
+        let activeProfile = try await fixture.store.loadProfiles().first(where: \.isActive)
+        XCTAssertEqual(activeProfile?.id, fixture.accountA.id)
+    }
+
+    @MainActor
+    func testCoordinatorReportsRollbackFailureWhenPreviousAccountCannotBeVerified() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let probe = SequenceAccountProbe(results: [fixture.identityA, nil, nil])
+        let appController = FakeOfficialAppController()
+        let coordinator = makeCoordinator(fixture: fixture, probe: probe, appController: appController)
+
+        do {
+            _ = try await coordinator.switchAccount(to: fixture.accountB.id) { _ in }
+            XCTFail("롤백 계정 재검증 실패를 성공으로 처리하면 안 됩니다")
+        } catch SwitcherError.rollbackFailed(let message) {
+            XCTAssertTrue(message.contains("롤백 후 계정이 인증되지 않았습니다"))
+        }
+
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.authFile), fixture.authenticationA)
+        let activeProfile = try await fixture.store.loadProfiles().first(where: \.isActive)
+        XCTAssertEqual(activeProfile?.id, fixture.accountA.id)
+    }
+
+    @MainActor
+    func testCoordinatorDoesNotRewriteAuthenticationWhenRollbackQuitIsRefused() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let protectedSession = fixture.paths.codexHome.appending(path: "sessions/2026/08/session.jsonl")
+        let probe = SequenceAccountProbe(results: [fixture.identityA, fixture.identityB])
+        let appController = FakeOfficialAppController(normalQuitResults: [true, false]) { launchCall in
+            if launchCall == 1 {
+                try FileManager.default.removeItem(at: protectedSession)
+            }
+        }
+        let coordinator = makeCoordinator(fixture: fixture, probe: probe, appController: appController)
+
+        do {
+            _ = try await coordinator.switchAccount(to: fixture.accountB.id) { _ in }
+            XCTFail("실행 중인 앱을 종료하지 못한 롤백은 실패해야 합니다")
+        } catch SwitcherError.rollbackFailed(let message) {
+            XCTAssertTrue(message.contains("정상 종료되지 않았습니다"))
+        }
+
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.authFile), fixture.authenticationB)
+        let activeProfile = try await fixture.store.loadProfiles().first(where: \.isActive)
+        XCTAssertEqual(activeProfile?.id, fixture.accountB.id)
+    }
+
+    @MainActor
+    private func makeCoordinatorFixture() async throws -> CoordinatorFixture {
+        let root = try TestFixtures.temporaryDirectory()
+        let paths = TestFixtures.paths(root: root)
+        try TestFixtures.populateSharedState(paths)
+        let store = EncryptedProfileStore(paths: paths, vault: CryptoVault(keyStore: MemoryKeyStore()))
+        let accountA = AccountProfile(
+            displayName: "Account A",
+            maskedEmail: "a***@example.com",
+            planType: "pro",
+            isActive: true
+        )
+        let accountB = AccountProfile(
+            displayName: "Account B",
+            maskedEmail: "b***@example.com",
+            planType: "pro"
+        )
+        let authenticationA = TestFixtures.authentication("account-a")
+        let authenticationB = TestFixtures.authentication("account-b")
+        _ = try await store.save(
+            profile: accountA,
+            secret: ProfileSecret(authCache: authenticationA, accountEmail: "a@example.com", planType: "pro")
+        )
+        _ = try await store.save(
+            profile: accountB,
+            secret: ProfileSecret(authCache: authenticationB, accountEmail: "b@example.com", planType: "pro")
+        )
+        try AtomicFileWriter().write(authenticationA, to: paths.authFile)
+        return CoordinatorFixture(
+            root: root,
+            paths: paths,
+            store: store,
+            accountA: accountA,
+            accountB: accountB,
+            authenticationA: authenticationA,
+            authenticationB: authenticationB
+        )
+    }
+
+    @MainActor
+    private func makeCoordinator(
+        fixture: CoordinatorFixture,
+        probe: SequenceAccountProbe,
+        appController: FakeOfficialAppController
+    ) -> AccountSwitchCoordinator {
+        AccountSwitchCoordinator(
+            paths: fixture.paths,
+            officialApp: fixture.officialApp,
+            profileStore: fixture.store,
+            accountProbe: probe,
+            appController: appController,
+            processScanner: StaticProcessScanner(),
+            preflight: AlwaysAllowPreflight(),
+            recoveryStore: RecoveryStore(
+                paths: fixture.paths,
+                vault: CryptoVault(keyStore: MemoryKeyStore())
+            )
+        )
+    }
+}
+
+private struct CoordinatorFixture: Sendable {
+    let root: URL
+    let paths: SwitcherPaths
+    let store: EncryptedProfileStore
+    let accountA: AccountProfile
+    let accountB: AccountProfile
+    let authenticationA: Data
+    let authenticationB: Data
+
+    var identityA: AccountIdentity {
+        AccountIdentity(type: "chatgpt", email: "a@example.com", planType: "pro", requiresOpenAIAuth: true)
+    }
+
+    var identityB: AccountIdentity {
+        AccountIdentity(type: "chatgpt", email: "b@example.com", planType: "pro", requiresOpenAIAuth: true)
+    }
+
+    var officialApp: OfficialAppInfo {
+        OfficialAppInfo(
+            path: "/Applications/Codex.app",
+            bundleIdentifier: "com.openai.codex",
+            shortVersion: "test",
+            buildVersion: "test",
+            bundledCodexPath: "/Applications/Codex.app/Contents/Resources/codex"
+        )
+    }
+}
+
+private actor SequenceAccountProbe: AccountProbing {
+    private var results: [AccountIdentity?]
+    private var readCount = 0
+    private let onRead: (@Sendable (Int) throws -> Void)?
+
+    init(results: [AccountIdentity?], onRead: (@Sendable (Int) throws -> Void)? = nil) {
+        self.results = results
+        self.onRead = onRead
+    }
+
+    func readAccount(refreshToken: Bool) async throws -> AccountIdentity? {
+        readCount += 1
+        try onRead?(readCount)
+        guard !results.isEmpty else { return nil }
+        return results.removeFirst()
+    }
+
+    func readRateLimits() async throws -> AccountRateLimits? {
+        nil
+    }
+}
+
+private struct StaticProcessScanner: CodexProcessScanning {
+    var processes: [ProcessSummary] = []
+
+    func scan(officialAppPath: String?) throws -> [ProcessSummary] {
+        processes
+    }
+}
+
+private struct AlwaysAllowPreflight: AccountSwitchPreflighting {
+    func validateBeforeSwitch() async throws {}
+    func validateAfterLaunch() async throws {}
+}
+
+private enum FakeCoordinatorError: Error {
+    case launchFailed
+}
+
+@MainActor
+private final class FakeOfficialAppController: OfficialAppControlling {
+    private var running = true
+    private var normalQuitResults: [Bool]
+    private let failedLaunchCalls: Set<Int>
+    private let onLaunch: (@MainActor (Int) throws -> Void)?
+    private(set) var launchCount = 0
+
+    init(
+        normalQuitResults: [Bool] = [],
+        failedLaunchCalls: Set<Int> = [],
+        onLaunch: (@MainActor (Int) throws -> Void)? = nil
+    ) {
+        self.normalQuitResults = normalQuitResults
+        self.failedLaunchCalls = failedLaunchCalls
+        self.onLaunch = onLaunch
+    }
+
+    func isRunning(_ app: OfficialAppInfo) -> Bool {
+        running
+    }
+
+    func requestNormalQuit(_ app: OfficialAppInfo, timeout: TimeInterval) async -> Bool {
+        let result = normalQuitResults.isEmpty ? true : normalQuitResults.removeFirst()
+        if result { running = false }
+        return result
+    }
+
+    func forceQuit(_ app: OfficialAppInfo, userApproved: Bool) throws {
+        guard userApproved else { throw SwitcherError.forceQuitApprovalRequired }
+        running = false
+    }
+
+    func launch(_ app: OfficialAppInfo) async throws {
+        launchCount += 1
+        guard !failedLaunchCalls.contains(launchCount) else {
+            running = false
+            throw FakeCoordinatorError.launchFailed
+        }
+        try onLaunch?(launchCount)
+        running = true
     }
 }

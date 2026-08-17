@@ -30,10 +30,14 @@ public struct AccountRegistrationService: Sendable {
     public func register(
         flow: LoginFlow = .browser,
         displayName: String? = nil,
+        replacing profileToReplace: AccountProfile? = nil,
         presentChallenge: @escaping @Sendable (LoginChallenge) async -> Bool
     ) async throws -> AccountProfile {
         let existing = try await profileStore.loadProfiles()
-        guard existing.count < 2 else { throw SwitcherError.profileLimitReached }
+        if let profileToReplace,
+           !existing.contains(where: { $0.id == profileToReplace.id }) {
+            throw SwitcherError.profileNotFound
+        }
 
         let temporaryHome = FileManager.default.temporaryDirectory
             .appending(path: "codex-account-switcher-login-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -102,13 +106,30 @@ public struct AccountRegistrationService: Sendable {
         let authData = try Data(contentsOf: authFile, options: .mappedIfSafe)
         try AuthCacheValidator.validate(authData)
 
-        let defaultName = "\((identity.planType ?? "ChatGPT").capitalized) Account \(existing.count + 1)"
+        let matchingProfile: AccountProfile?
+        if let email = identity.email {
+            matchingProfile = try await profileStore.profile(matchingAccountEmail: email)
+        } else {
+            matchingProfile = nil
+        }
+        if let profileToReplace,
+           let matchingProfile,
+           matchingProfile.id != profileToReplace.id {
+            throw SwitcherError.accountAlreadyRegistered(matchingProfile.displayName)
+        }
+        let targetProfile = profileToReplace ?? matchingProfile
+        let requestedName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedName = requestedName.flatMap { $0.isEmpty ? nil : $0 }
+            ?? targetProfile?.displayName
+            ?? "\((identity.planType ?? "ChatGPT").capitalized) Account \(existing.count + 1)"
         let profile = AccountProfile(
-            displayName: displayName?.isEmpty == false ? displayName! : defaultName,
+            id: targetProfile?.id ?? UUID(),
+            displayName: resolvedName,
             maskedEmail: Redactor.maskEmail(identity.email),
             planType: identity.planType,
+            createdAt: targetProfile?.createdAt ?? Date(),
             lastValidatedAt: Date(),
-            isActive: false
+            isActive: profileToReplace == nil ? (targetProfile?.isActive ?? false) : false
         )
         let secret = ProfileSecret(
             authCache: authData,

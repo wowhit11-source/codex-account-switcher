@@ -79,22 +79,71 @@ final class SecurityAndProfileTests: XCTestCase {
         XCTAssertEqual(try AtomicFileWriter().permissions(of: paths.profileMetadataFile), 0o600)
     }
 
-    func testProfileStoreEnforcesTwoAccountLimit() async throws {
+    func testProfileStoreSupportsMoreThanTwoAccounts() async throws {
         let root = try TestFixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = EncryptedProfileStore(paths: TestFixtures.paths(root: root), vault: CryptoVault(keyStore: MemoryKeyStore()))
-        for index in 1...2 {
+        for index in 1...5 {
             _ = try await store.save(
                 profile: AccountProfile(displayName: "Account \(index)"),
                 secret: ProfileSecret(authCache: TestFixtures.authentication("\(index)"), accountEmail: "u\(index)@example.com", planType: "pro")
             )
         }
-        await XCTAssertThrowsErrorAsync {
-            _ = try await store.save(
-                profile: AccountProfile(displayName: "Account 3"),
-                secret: ProfileSecret(authCache: TestFixtures.authentication("3"), accountEmail: "u3@example.com", planType: "pro")
+
+        let profiles = try await store.loadProfiles()
+        XCTAssertEqual(profiles.count, 5)
+        XCTAssertEqual(profiles.map(\.displayName), (1...5).map { "Account \($0)" })
+    }
+
+    func testProfileLookupMatchesStoredEmailCaseInsensitively() async throws {
+        let root = try TestFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = EncryptedProfileStore(paths: TestFixtures.paths(root: root), vault: CryptoVault(keyStore: MemoryKeyStore()))
+        let profile = AccountProfile(displayName: "Existing Account")
+        _ = try await store.save(
+            profile: profile,
+            secret: ProfileSecret(
+                authCache: TestFixtures.authentication("existing"),
+                accountEmail: "User@Example.com",
+                planType: "pro"
             )
-        }
+        )
+
+        let matched = try await store.profile(matchingAccountEmail: "user@example.com")
+
+        XCTAssertEqual(matched?.id, profile.id)
+    }
+
+    func testSavingExistingProfileReplacesSecretWithoutCreatingDuplicate() async throws {
+        let root = try TestFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = EncryptedProfileStore(paths: TestFixtures.paths(root: root), vault: CryptoVault(keyStore: MemoryKeyStore()))
+        var profile = AccountProfile(displayName: "Reusable Slot")
+        _ = try await store.save(
+            profile: profile,
+            secret: ProfileSecret(
+                authCache: TestFixtures.authentication("old"),
+                accountEmail: "old@example.com",
+                planType: "free"
+            )
+        )
+
+        profile.maskedEmail = "n***@example.com"
+        profile.planType = "pro"
+        _ = try await store.save(
+            profile: profile,
+            secret: ProfileSecret(
+                authCache: TestFixtures.authentication("new"),
+                accountEmail: "new@example.com",
+                planType: "pro"
+            )
+        )
+
+        let profiles = try await store.loadProfiles()
+        let secret = try await store.secret(for: profile.id)
+        XCTAssertEqual(profiles, [profile])
+        XCTAssertEqual(secret.accountEmail, "new@example.com")
+        XCTAssertEqual(secret.authCache, TestFixtures.authentication("new"))
     }
 
     func testRedactionAndEmailMasking() {
@@ -104,6 +153,20 @@ final class SecurityAndProfileTests: XCTestCase {
         XCTAssertFalse(redacted.contains("abcdefghijk"))
         XCTAssertFalse(redacted.contains("user@example.com"))
         XCTAssertEqual(Redactor.maskEmail("user@example.com"), "u***@example.com")
+    }
+
+    func testRedactionRemovesQuotedJSONTokenValues() {
+        let raw = #"{"access_token":"fixture-access-token-json","refresh_token": "fixture-refresh-token-json", "id_token":"fixture-id-token-json", "authorization":"Bearer fixture-bearer-token"}"#
+        let redacted = Redactor.redact(raw)
+
+        XCTAssertFalse(redacted.contains("fixture-access-token-json"))
+        XCTAssertFalse(redacted.contains("fixture-refresh-token-json"))
+        XCTAssertFalse(redacted.contains("fixture-id-token-json"))
+        XCTAssertFalse(redacted.contains("fixture-bearer-token"))
+        XCTAssertEqual(
+            redacted,
+            #"{"access_token":"[REDACTED]","refresh_token": "[REDACTED]", "id_token":"[REDACTED]", "authorization":"[REDACTED]"}"#
+        )
     }
 }
 
@@ -140,20 +203,5 @@ private final class CountingKeyStore: SecretKeyStore, @unchecked Sendable {
         defer { lock.unlock() }
         deletes += 1
         keyData = nil
-    }
-}
-
-private extension XCTestCase {
-    func XCTAssertThrowsErrorAsync(
-        _ expression: () async throws -> Void,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) async {
-        do {
-            try await expression()
-            XCTFail("Expected an error", file: file, line: line)
-        } catch {
-            // Expected.
-        }
     }
 }

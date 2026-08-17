@@ -37,6 +37,30 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         XCTAssertEqual(results.filter(\.isOfficialAppProcess).map(\.pid), [100, 101])
     }
 
+    func testProcessScannerDetectsHostManagedOfficialAppAuthentication() {
+        let sample = """
+        100 1 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT
+        101 100 /Applications/ChatGPT.app/Contents/Resources/codex -c features.code_mode_host=true app-server --analytics-default-enabled
+        """
+        let scanner = CodexProcessScanner()
+        let results = scanner.parse(output: sample, officialAppPath: "/Applications/ChatGPT.app")
+
+        XCTAssertEqual(results.filter(\.usesHostManagedAuthentication).map(\.pid), [101])
+        XCTAssertEqual(scanner.officialAppAuthenticationMode(in: results), .hostManaged)
+    }
+
+    func testProcessScannerDoesNotAssumeHostManagedAuthenticationForStandardAppServer() {
+        let sample = """
+        100 1 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT
+        101 100 /Applications/ChatGPT.app/Contents/Resources/codex app-server
+        """
+        let scanner = CodexProcessScanner()
+        let results = scanner.parse(output: sample, officialAppPath: "/Applications/ChatGPT.app")
+
+        XCTAssertFalse(results.contains(where: \.usesHostManagedAuthentication))
+        XCTAssertEqual(scanner.officialAppAuthenticationMode(in: results), .standardOrUnknown)
+    }
+
     func testProcessScannerIgnoresComputerUseHelpersAndCollapsesCLIProcessTree() {
         let sample = """
         191 50 /Users/test/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient computer-history mcp
@@ -79,6 +103,112 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         XCTAssertTrue(message?.contains("2개가 열린 상태") == true)
         XCTAssertTrue(message?.contains("작업 중이 아니어도") == true)
         XCTAssertTrue(message?.contains("exit 또는 Ctrl+C") == true)
+    }
+
+    func testOneClickAvailabilityAllowsVerifiedHostManagedButRejectsKeyringAuthentication() {
+        let hostManaged = AccountSwitchPreflightPolicy.evaluate(
+            credentialsStoreSetting: "file",
+            authFileExists: true,
+            officialAppAuthenticationMode: .hostManaged,
+            runtimeIdentityAvailable: true
+        )
+        let keyring = AccountSwitchPreflightPolicy.evaluate(
+            credentialsStoreSetting: "keyring",
+            authFileExists: true,
+            officialAppAuthenticationMode: .standardOrUnknown,
+            runtimeIdentityAvailable: true
+        )
+
+        XCTAssertTrue(hostManaged.isAvailable)
+        XCTAssertNil(hostManaged.reason)
+        XCTAssertTrue(hostManaged.warning?.contains("호환 모드") == true)
+        XCTAssertFalse(keyring.isAvailable)
+        XCTAssertTrue(keyring.reason?.contains("keyring") == true)
+    }
+
+    func testOneClickAvailabilityAllowsVerifiedAutoOrUnspecifiedFileAuthentication() {
+        for setting in ["auto", nil] as [String?] {
+            let availability = AccountSwitchPreflightPolicy.evaluate(
+                credentialsStoreSetting: setting,
+                authFileExists: true,
+                officialAppAuthenticationMode: .notRunning,
+                runtimeIdentityAvailable: true
+            )
+            XCTAssertTrue(availability.isAvailable)
+        }
+
+        let unverified = AccountSwitchPreflightPolicy.evaluate(
+            credentialsStoreSetting: nil,
+            authFileExists: true,
+            officialAppAuthenticationMode: .notRunning,
+            runtimeIdentityAvailable: false
+        )
+        XCTAssertFalse(unverified.isAvailable)
+    }
+
+    func testAccountSwitchPreflightAllowsRuntimeVerifiedUnspecifiedFileAuthentication() async throws {
+        let root = try TestFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = TestFixtures.paths(root: root)
+        try TestFixtures.populateSharedState(paths)
+        try AtomicFileWriter().write(TestFixtures.authentication("verified"), to: paths.authFile)
+        let preflight = AccountSwitchPreflight(
+            paths: paths,
+            officialApp: Self.testOfficialApp,
+            processScanner: StaticAuthenticationProcessScanner(),
+            accountProbe: StaticAuthenticationProbe(identity: Self.testIdentity)
+        )
+
+        try await preflight.validateBeforeSwitch()
+    }
+
+    func testAccountSwitchPreflightRejectsConfiguredKeyring() async throws {
+        let root = try TestFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = TestFixtures.paths(root: root)
+        try TestFixtures.populateSharedState(paths)
+        try Data("cli_auth_credentials_store = \"keyring\"\n".utf8)
+            .write(to: paths.codexHome.appending(path: "config.toml"))
+        try AtomicFileWriter().write(TestFixtures.authentication("keyring"), to: paths.authFile)
+        let preflight = AccountSwitchPreflight(
+            paths: paths,
+            officialApp: Self.testOfficialApp,
+            processScanner: StaticAuthenticationProcessScanner(),
+            accountProbe: StaticAuthenticationProbe(identity: Self.testIdentity)
+        )
+
+        do {
+            try await preflight.validateBeforeSwitch()
+            XCTFail("keyring 설정은 파일 기반 원클릭 전환을 허용하면 안 됩니다")
+        } catch SwitcherError.oneClickSwitchUnavailable(let reason) {
+            XCTAssertTrue(reason.contains("keyring"))
+        }
+    }
+
+    func testAccountSwitchPreflightAllowsVerifiedHostManagedAppBeforeAndAfterLaunch() async throws {
+        let root = try TestFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = TestFixtures.paths(root: root)
+        try TestFixtures.populateSharedState(paths)
+        try AtomicFileWriter().write(TestFixtures.authentication("host-managed"), to: paths.authFile)
+        let hostManaged = ProcessSummary(
+            pid: 101,
+            parentPID: 100,
+            executable: Self.testOfficialApp.bundledCodexPath ?? "codex",
+            isOfficialAppProcess: true,
+            blocksSwitch: false,
+            usesHostManagedAuthentication: true
+        )
+        let preflight = AccountSwitchPreflight(
+            paths: paths,
+            officialApp: Self.testOfficialApp,
+            processScanner: StaticAuthenticationProcessScanner(processes: [hostManaged]),
+            accountProbe: StaticAuthenticationProbe(identity: Self.testIdentity)
+        )
+
+        for validation in [preflight.validateBeforeSwitch, preflight.validateAfterLaunch] {
+            try await validation()
+        }
     }
 
     func testProcessControllerInterruptsWrapperThenTerminatesExposedNativeChild() async throws {
@@ -196,6 +326,41 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         let parsed = try CodexAppServerClient.parseRateLimits(rates)
         XCTAssertEqual(parsed?.primary?.usedPercent, 74)
         XCTAssertEqual(parsed?.primary?.windowDurationMinutes, 1_008)
+    }
+
+    private static let testOfficialApp = OfficialAppInfo(
+        path: "/Applications/Codex.app",
+        bundleIdentifier: "com.openai.codex",
+        shortVersion: "test",
+        buildVersion: "test",
+        bundledCodexPath: "/Applications/Codex.app/Contents/Resources/codex"
+    )
+
+    private static let testIdentity = AccountIdentity(
+        type: "chatgpt",
+        email: "user@example.com",
+        planType: "pro",
+        requiresOpenAIAuth: true
+    )
+}
+
+private struct StaticAuthenticationProcessScanner: CodexProcessScanning {
+    var processes: [ProcessSummary] = []
+
+    func scan(officialAppPath: String?) throws -> [ProcessSummary] {
+        processes
+    }
+}
+
+private struct StaticAuthenticationProbe: AccountProbing {
+    var identity: AccountIdentity?
+
+    func readAccount(refreshToken: Bool) async throws -> AccountIdentity? {
+        identity
+    }
+
+    func readRateLimits() async throws -> AccountRateLimits? {
+        nil
     }
 }
 

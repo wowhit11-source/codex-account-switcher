@@ -28,9 +28,6 @@ public actor EncryptedProfileStore {
         try AuthCacheValidator.validate(secret.authCache)
         try prepareDirectories()
         var profiles = try loadProfiles()
-        if !profiles.contains(where: { $0.id == profile.id }), profiles.count >= 2 {
-            throw SwitcherError.profileLimitReached
-        }
 
         let secretData = try encoder.encode(secret)
         let encrypted = try vault.encrypt(secretData)
@@ -43,6 +40,21 @@ public actor EncryptedProfileStore {
         }
         try saveMetadata(profiles)
         return profile
+    }
+
+    public func profile(matchingAccountEmail email: String) throws -> AccountProfile? {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedEmail.isEmpty else { return nil }
+
+        for profile in try loadProfiles() {
+            guard
+                let secret = try? secret(for: profile.id),
+                let storedEmail = secret.accountEmail,
+                storedEmail.caseInsensitiveCompare(normalizedEmail) == .orderedSame
+            else { continue }
+            return profile
+        }
+        return nil
     }
 
     public func secret(for profileID: UUID) throws -> ProfileSecret {

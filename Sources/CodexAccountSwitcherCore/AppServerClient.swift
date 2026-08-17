@@ -91,7 +91,6 @@ public final class AppServerConnection: @unchecked Sendable {
                     "version": .string("1.0.0")
                 ]),
                 "capabilities": .object([
-                    "experimentalApi": .bool(true),
                     "optOutNotificationMethods": .array([
                         .string("item/agentMessage/delta"),
                         .string("item/reasoning/summaryTextDelta")

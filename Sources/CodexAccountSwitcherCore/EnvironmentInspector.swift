@@ -19,6 +19,12 @@ public struct OfficialAppInfo: Codable, Equatable, Sendable {
     public var url: URL { URL(fileURLWithPath: path) }
 }
 
+public enum OfficialAppAuthenticationMode: String, Codable, Equatable, Sendable {
+    case notRunning
+    case hostManaged
+    case standardOrUnknown
+}
+
 public struct EnvironmentReport: Codable, Equatable, Sendable {
     public var generatedAt: Date
     public var macOSVersion: String
@@ -33,6 +39,7 @@ public struct EnvironmentReport: Codable, Equatable, Sendable {
     public var loginStatus: String?
     public var credentialsStoreSetting: String?
     public var officialApp: OfficialAppInfo?
+    public var officialAppAuthenticationMode: OfficialAppAuthenticationMode
     public var protectedStatePaths: [String]
     public var runningProcessSummaries: [String]
 
@@ -50,6 +57,7 @@ public struct EnvironmentReport: Codable, Equatable, Sendable {
         loginStatus: String?,
         credentialsStoreSetting: String?,
         officialApp: OfficialAppInfo?,
+        officialAppAuthenticationMode: OfficialAppAuthenticationMode = .notRunning,
         protectedStatePaths: [String],
         runningProcessSummaries: [String]
     ) {
@@ -66,6 +74,7 @@ public struct EnvironmentReport: Codable, Equatable, Sendable {
         self.loginStatus = loginStatus
         self.credentialsStoreSetting = credentialsStoreSetting
         self.officialApp = officialApp
+        self.officialAppAuthenticationMode = officialAppAuthenticationMode
         self.protectedStatePaths = protectedStatePaths
         self.runningProcessSummaries = runningProcessSummaries
     }
@@ -144,13 +153,22 @@ public struct ProcessSummary: Equatable, Sendable {
     public var executable: String
     public var isOfficialAppProcess: Bool
     public var blocksSwitch: Bool
+    public var usesHostManagedAuthentication: Bool
 
-    public init(pid: Int32, parentPID: Int32, executable: String, isOfficialAppProcess: Bool, blocksSwitch: Bool) {
+    public init(
+        pid: Int32,
+        parentPID: Int32,
+        executable: String,
+        isOfficialAppProcess: Bool,
+        blocksSwitch: Bool,
+        usesHostManagedAuthentication: Bool = false
+    ) {
         self.pid = pid
         self.parentPID = parentPID
         self.executable = executable
         self.isOfficialAppProcess = isOfficialAppProcess
         self.blocksSwitch = blocksSwitch
+        self.usesHostManagedAuthentication = usesHostManagedAuthentication
     }
 
     public var safeDescription: String {
@@ -228,9 +246,18 @@ public struct CodexProcessScanner: Sendable {
                 parentPID: process.parentPID,
                 executable: executable,
                 isOfficialAppProcess: official,
-                blocksSwitch: blocksSwitch
+                blocksSwitch: blocksSwitch,
+                usesHostManagedAuthentication: official && isHostManagedAppServer(command: process.command)
             )
         }
+    }
+
+    public func officialAppAuthenticationMode(in processes: [ProcessSummary]) -> OfficialAppAuthenticationMode {
+        let officialProcesses = processes.filter(\.isOfficialAppProcess)
+        guard !officialProcesses.isEmpty else { return .notRunning }
+        return officialProcesses.contains(where: \.usesHostManagedAuthentication)
+            ? .hostManaged
+            : .standardOrUnknown
     }
 
     private func isOfficialProcess(command: String, officialAppPath: String?) -> Bool {
@@ -241,6 +268,13 @@ public struct CodexProcessScanner: Sendable {
         let lower = command.lowercased()
         return lower.contains("/.codex/computer-use/codex computer use.app/")
             || lower.contains("/codex computer use.app/contents/")
+    }
+
+    private func isHostManagedAppServer(command: String) -> Bool {
+        let lower = command.lowercased()
+        guard lower.contains("app-server") else { return false }
+        return lower.contains("features.code_mode_host=true")
+            || lower.contains("--enable code_mode_host")
     }
 
     private func codexCLIExecutable(in command: String) -> String? {
@@ -317,6 +351,7 @@ public struct EnvironmentInspector: Sendable {
         }
         let protected = protectedStatePaths()
         let processes = (try? scanner.scan(officialAppPath: official?.path)) ?? []
+        let officialAppAuthenticationMode = scanner.officialAppAuthenticationMode(in: processes)
         let config = paths.codexHome.appending(path: "config.toml")
         return EnvironmentReport(
             macOSVersion: ProcessInfo.processInfo.operatingSystemVersionString,
@@ -331,6 +366,7 @@ public struct EnvironmentInspector: Sendable {
             loginStatus: loginStatus.map(Redactor.redact),
             credentialsStoreSetting: credentialsStoreSetting(config),
             officialApp: official,
+            officialAppAuthenticationMode: officialAppAuthenticationMode,
             protectedStatePaths: protected,
             runningProcessSummaries: processes.map(\.safeDescription)
         )
@@ -343,13 +379,7 @@ public struct EnvironmentInspector: Sendable {
     }
 
     private func credentialsStoreSetting(_ config: URL) -> String? {
-        guard let text = try? String(contentsOf: config, encoding: .utf8) else { return nil }
-        let pattern = #"(?m)^\s*cli_auth_credentials_store\s*=\s*([^#\n]+)"#
-        guard let range = text.range(of: pattern, options: .regularExpression) else { return nil }
-        let line = text[range]
-        return line.split(separator: "=", maxSplits: 1).last?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        CodexCredentialsStoreMode.configuredValue(at: config)
     }
 
     private func protectedStatePaths() -> [String] {

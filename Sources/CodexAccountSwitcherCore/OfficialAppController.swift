@@ -2,7 +2,15 @@ import AppKit
 import Foundation
 
 @MainActor
-public final class OfficialAppController {
+public protocol OfficialAppControlling: Sendable {
+    func isRunning(_ app: OfficialAppInfo) -> Bool
+    func requestNormalQuit(_ app: OfficialAppInfo, timeout: TimeInterval) async -> Bool
+    func forceQuit(_ app: OfficialAppInfo, userApproved: Bool) throws
+    func launch(_ app: OfficialAppInfo) async throws
+}
+
+@MainActor
+public final class OfficialAppController: OfficialAppControlling {
     public init() {}
 
     public func isRunning(_ app: OfficialAppInfo) -> Bool {

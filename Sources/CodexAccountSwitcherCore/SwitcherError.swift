@@ -5,7 +5,7 @@ public enum SwitcherError: Error, LocalizedError, Sendable {
     case invalidAuthenticationCache
     case keychain(String)
     case cryptography(String)
-    case profileLimitReached
+    case accountAlreadyRegistered(String)
     case profileNotFound
     case activeProcessConflict([String])
     case activeProcessTerminationFailed([String])
@@ -15,8 +15,10 @@ public enum SwitcherError: Error, LocalizedError, Sendable {
     case accountMismatch(expected: String, actual: String)
     case accountVerificationFailed(String)
     case appServer(String)
+    case oneClickSwitchUnavailable(String)
     case switchAlreadyInProgress
     case sessionFilesMissing([String])
+    case protectedStateChangedDuringSwitch([String])
     case rollbackFailed(String)
     case markerNotFound
     case fileOperation(String)
@@ -31,8 +33,8 @@ public enum SwitcherError: Error, LocalizedError, Sendable {
             return "Keychain 작업에 실패했습니다: \(message)"
         case .cryptography(let message):
             return "인증 캐시 암호화 작업에 실패했습니다: \(message)"
-        case .profileLimitReached:
-            return "초기 버전에서는 계정을 최대 두 개까지 등록할 수 있습니다."
+        case .accountAlreadyRegistered(let displayName):
+            return "로그인한 계정은 이미 \(displayName) 프로필에 등록되어 있습니다."
         case .profileNotFound:
             return "선택한 계정 프로필을 찾지 못했습니다."
         case .activeProcessConflict(let processes):
@@ -59,10 +61,14 @@ public enum SwitcherError: Error, LocalizedError, Sendable {
             return "새 계정을 검증하지 못했습니다: \(message)"
         case .appServer(let message):
             return "Codex App Server 오류: \(message)"
+        case .oneClickSwitchUnavailable(let message):
+            return "원클릭 계정 전환을 사용할 수 없습니다: \(message) Guided Switch 또는 공식 앱의 계정 메뉴를 사용하세요."
         case .switchAlreadyInProgress:
             return "다른 계정 전환이 이미 진행 중입니다."
         case .sessionFilesMissing(let paths):
             return "보호 대상 세션 파일이 사라졌습니다: \(paths.joined(separator: ", "))"
+        case .protectedStateChangedDuringSwitch(let paths):
+            return "인증 파일을 교체하는 동안 보호 상태가 변경되어 전환을 중단했습니다: \(paths.joined(separator: ", "))"
         case .rollbackFailed(let message):
             return "자동 롤백에 실패했습니다: \(message)"
         case .markerNotFound:

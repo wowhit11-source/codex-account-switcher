@@ -76,6 +76,11 @@ public struct SessionProtectionPolicy: Sendable {
     }
 }
 
+public enum SessionSnapshotCaptureMode: Sendable {
+    case contentHashed
+    case metadataOnly
+}
+
 public struct SessionSnapshotter: Sendable {
     public let codexHome: URL
     public let policy: SessionProtectionPolicy
@@ -85,12 +90,12 @@ public struct SessionSnapshotter: Sendable {
         self.policy = policy
     }
 
-    public func capture() throws -> SessionSnapshot {
+    public func capture(mode: SessionSnapshotCaptureMode = .contentHashed) throws -> SessionSnapshot {
         var entries: [String: FileFingerprint] = [:]
         for path in policy.singleHashedPaths {
             let url = codexHome.appending(path: path)
             if FileManager.default.fileExists(atPath: url.path) {
-                let item = try fingerprint(url: url, hashContents: true)
+                let item = try fingerprint(url: url, hashContents: mode == .contentHashed)
                 entries[item.relativePath] = item
             }
         }
@@ -117,7 +122,10 @@ public struct SessionSnapshotter: Sendable {
                         if values.isDirectory == true { enumerator.skipDescendants() }
                         continue
                     }
-                    let item = try fingerprint(url: itemURL, hashContents: values.isRegularFile == true)
+                    let item = try fingerprint(
+                        url: itemURL,
+                        hashContents: values.isRegularFile == true && mode == .contentHashed
+                    )
                     entries[item.relativePath] = item
                 }
             }
@@ -141,7 +149,13 @@ public struct SessionSnapshotter: Sendable {
         var unchanged = 0
         for key in beforeKeys.intersection(afterKeys).sorted() {
             guard let old = before.entries[key], let new = after.entries[key] else { continue }
-            if old.kind != new.kind || old.size != new.size || old.sha256 != new.sha256 {
+            let contentChanged: Bool
+            if old.sha256 != nil || new.sha256 != nil {
+                contentChanged = old.sha256 != new.sha256
+            } else {
+                contentChanged = old.modifiedAt != new.modifiedAt
+            }
+            if old.kind != new.kind || old.size != new.size || contentChanged {
                 modified.append(key)
             } else {
                 unchanged += 1

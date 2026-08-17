@@ -22,9 +22,10 @@ flowchart LR
 
 - `AppServerConnection`: JSONL/JSON-RPC 2.0 초기화, 요청 correlation, 알림, timeout, 오류 redaction
 - `CodexAppServerClient`: `account/read`, `account/logout`, `account/rateLimits/read`, `account/usage/read`
+- `AccountSwitchPreflight`: credential store, 파일 인증 runtime probe, 공식 앱 host-managed 호환 모드 판정
 - `AccountRegistrationService`: 임시 `CODEX_HOME`, 파일 credential store, browser/device-code 로그인, 완료 알림, 즉시 암호화
 - `SystemKeychainStore` / `ProcessCachedSecretKeyStore` / `CryptoVault`: Keychain 키, 프로세스 단위 키 캐시와 AES-GCM 봉인
-- `EncryptedProfileStore`: 두 프로필의 메타데이터와 암호문 저장
+- `EncryptedProfileStore`: 여러 프로필의 메타데이터와 암호문 저장
 - `AtomicFileWriter`: `0600`, `fsync`, atomic rename
 - `SwitchLock`: 프로세스 내부 registry + 프로세스 간 `fcntl` write lock
 - `CodexProcessScanner`: 공식 앱 자식과 standalone Codex 작업 구분
@@ -47,24 +48,27 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A["lock + process gate"] --> B["protected-state snapshot"]
+    A["lock + process gate"] --> P["credential store + runtime preflight"]
+    P --> B["protected-state content snapshot"]
     B --> C["refresh and seal current auth"]
     C --> D["normal quit official app"]
-    D --> E["encrypted emergency backup"]
+    D --> E["encrypted emergency backup + quiet manifest"]
     E --> F["atomic auth replacement"]
     F --> G["account/read + exact identity check"]
-    G --> H["relaunch official app"]
+    G --> Q["quiet manifest must be unchanged"]
+    Q --> H["relaunch official app"]
     H --> I["post snapshot and deletion gate"]
-    I --> J["commit active profile"]
+    I --> J["complete"]
     F -->|failure| R["restore previous auth"]
     G -->|failure| R
+    Q -->|protected state changed| R
     H -->|failure| R
     I -->|protected file deleted| R
     R --> V["relaunch + verify restored account"]
 ```
 
-보호 파일의 내용 변경은 공식 앱 정상 종료·시작 과정에서 발생할 수 있어 경고로 기록합니다. 파일 삭제는 destructive change로 간주해 롤백합니다. 인증 파일은 비교 집합에 포함하지 않습니다.
+공식 앱 종료 후부터 재실행 전까지는 인증 파일 외 보호 상태가 하나도 바뀌지 않아야 합니다. 이 조용한 구간은 내용 전체를 다시 해시하지 않고 경로·종류·크기·수정 시각 manifest로 검사하며, 삭제·수정·추가가 하나라도 있으면 롤백합니다. 재실행 이후 보호 파일의 내용 변경은 정상 상태 저장일 수 있어 경고로 기록하고, 파일 삭제만 destructive change로 간주해 롤백합니다. 인증 파일은 비교 집합에 포함하지 않습니다.
 
 ## 호스트 관리형 인증
 
-공식 앱이 향후 `chatgptAuthTokens` 같은 호스트 관리형 인증만 사용해 공유 `auth.json` 변경을 무시하면 private token을 읽거나 주입하지 않습니다. 원클릭 전환을 비활성화하고 공식 logout/login을 안내하는 Guided Switch로 제한해야 합니다. 실제 데스크톱 세션 수용 여부는 Continuity Test로만 판정합니다.
+공식 앱이 `chatgptAuthTokens` 같은 호스트 관리형 인증을 사용해도 private token을 읽거나 주입하지 않습니다. 대신 유효한 파일 인증과 새 App Server의 계정 응답이 확인되면 경고를 표시하고 `auth.json` 교체를 호환 모드로 허용합니다. 별도 App Server 검증은 공식 데스크톱 호스트가 같은 계정을 수용했다는 증거가 아니므로, 사용자가 재실행된 공식 앱에서 계정을 확인해야 합니다. 실제 데스크톱 세션 수용 여부는 Continuity Test로 판정합니다.

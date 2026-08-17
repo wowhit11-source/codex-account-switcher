@@ -2,6 +2,7 @@ import Foundation
 
 public enum Redactor {
     private static let secretPatterns: [(String, String)] = [
+        (#"(?i)(["']?(?:access_token|refresh_token|id_token|authorization)["']?\s*:\s*)(["'])[^"']*(["'])"#, "$1$2[REDACTED]$3"),
         (#"(?i)bearer\s+[A-Za-z0-9._~+/-]+=*"#, "Bearer [REDACTED]"),
         (#"(?i)(access_token|refresh_token|id_token|authorization)\s*[=:]\s*[^\s,}\"]+"#, "$1=[REDACTED]"),
         (#"sk-[A-Za-z0-9_-]{8,}"#, "[REDACTED_API_KEY]"),

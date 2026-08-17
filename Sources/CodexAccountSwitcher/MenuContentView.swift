@@ -43,8 +43,25 @@ struct MenuContentView: View {
 
     private var currentAccount: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("현재 계정").font(.caption).foregroundStyle(.secondary)
-            if let account = model.currentAccount {
+            Text(currentAccountTitle).font(.caption).foregroundStyle(.secondary)
+            if model.accountDisplayMode == .officialHostManaged {
+                HStack {
+                    Image(systemName: "person.crop.circle.badge.questionmark")
+                        .foregroundStyle(.orange)
+                    Text("공식 앱 내부 계정")
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Text("앱에서 확인")
+                        .font(.caption)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(.orange.opacity(0.12), in: Capsule())
+                }
+                Text("호스트 관리 인증 사용 중 · auth.json 계정을 현재 계정으로 표시하지 않음")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let account = model.currentAccount {
                 HStack {
                     Circle().fill(.green).frame(width: 8, height: 8)
                     Text(Redactor.maskEmail(account.email) ?? "이메일 없음").fontWeight(.semibold)
@@ -55,6 +72,9 @@ struct MenuContentView: View {
                         .padding(.vertical, 3)
                         .background(.blue.opacity(0.12), in: Capsule())
                 }
+            } else if model.accountDisplayMode == .checking {
+                Label("계정 정보 확인 중", systemImage: "arrow.triangle.2.circlepath")
+                    .foregroundStyle(.secondary)
             } else {
                 Label("인증된 ChatGPT 계정 없음", systemImage: "person.crop.circle.badge.questionmark")
                     .foregroundStyle(.secondary)
@@ -62,10 +82,27 @@ struct MenuContentView: View {
         }
     }
 
+    private var currentAccountTitle: String {
+        switch model.accountDisplayMode {
+        case .checking:
+            "계정 정보"
+        case .officialHostManaged:
+            "공식 앱 현재 계정"
+        case .storedAuthentication:
+            "저장된 인증 계정"
+        case .switchVerified:
+            "방금 전환한 계정"
+        }
+    }
+
     private var usage: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text("Codex 사용량").font(.caption).foregroundStyle(.secondary)
-            if let primary = model.rateLimits?.primary {
+            if model.accountDisplayMode == .officialHostManaged {
+                Text("공식 앱 내부 계정의 사용량은 공식 앱에서 확인하세요")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let primary = model.rateLimits?.primary {
                 ProgressView(value: min(max(primary.usedPercent, 0), 100), total: 100)
                 HStack {
                     Text("Primary 사용 \(primary.usedPercent, specifier: "%.0f")%")
@@ -85,46 +122,95 @@ struct MenuContentView: View {
     private var profiles: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text("등록된 계정").font(.caption).foregroundStyle(.secondary)
+            if !model.oneClickSwitchAvailability.isAvailable,
+               model.oneClickSwitchAvailability.reason != "환경 확인 중",
+               let reason = model.oneClickSwitchAvailability.reason {
+                Label(reason, systemImage: "exclamationmark.shield")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if model.profiles.isEmpty {
                 Text("등록된 프로필이 없습니다").font(.caption).foregroundStyle(.secondary)
+            } else if model.profiles.count <= 3 {
+                profileRows
+            } else {
+                ScrollView {
+                    profileRows
+                }
+                .frame(height: 190)
             }
+        }
+    }
+
+    private var profileRows: some View {
+        LazyVStack(alignment: .leading, spacing: 7) {
             ForEach(model.profiles) { profile in
-                HStack {
-                    Image(systemName: profile.isActive ? "largecircle.fill.circle" : "circle")
-                        .foregroundStyle(profile.isActive ? .green : .secondary)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(profile.displayName)
-                        Text([profile.planType?.capitalized, profile.maskedEmail].compactMap { $0 }.joined(separator: " · "))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if !profile.isActive {
-                        Button("전환") { model.requestSwitch(to: profile) }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .disabled(model.isBusy)
-                    }
-                }
-                .contextMenu {
-                    Button("프로필 삭제", role: .destructive) { model.deleteProfile(profile) }
+                profileRow(profile)
+            }
+        }
+    }
+
+    private func profileRow(_ profile: AccountProfile) -> some View {
+        let isVerifiedActive = profile.isActive && model.accountDisplayMode != .officialHostManaged
+        return HStack {
+            Image(systemName: isVerifiedActive ? "largecircle.fill.circle" : "circle")
+                .foregroundStyle(isVerifiedActive ? .green : .secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(profile.displayName)
+                Text([profile.planType?.capitalized, profile.maskedEmail].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if profile.isActive && model.accountDisplayMode == .officialHostManaged {
+                    Text("스위처의 마지막 전환 기록 · 현재 여부 미확인")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
+            Spacer()
+            if !isVerifiedActive {
+                if model.oneClickSwitchAvailability.isAvailable {
+                    Button("전환") { model.requestSwitch(to: profile) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(model.isBusy)
+                } else {
+                    Text("원클릭 불가")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(.orange.opacity(0.12), in: Capsule())
+                        .help(model.oneClickSwitchAvailability.reason ?? "원클릭 전환을 사용할 수 없습니다")
+                }
+            }
+            Menu {
+                Button("브라우저로 계정 변경") { model.requestAccountChange(profile, flow: .browser) }
+                Button("Device Code로 계정 변경") { model.requestAccountChange(profile, flow: .deviceCode) }
+                Divider()
+                Button("프로필 삭제", role: .destructive) { model.deleteProfile(profile) }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(model.isBusy)
         }
     }
 
     private var controls: some View {
         Grid(horizontalSpacing: 8, verticalSpacing: 7) {
             GridRow {
-                Button("현재 계정 등록") { model.captureCurrentAccount() }
-                    .disabled(model.isBusy || model.currentAccount == nil || model.profiles.count >= 2)
+                Button("저장 인증 등록") { model.captureCurrentAccount() }
+                    .disabled(model.isBusy || model.storedAccount == nil)
+                    .help("~/.codex/auth.json에 저장된 계정을 등록합니다. 공식 앱의 호스트 관리 계정과 다를 수 있습니다.")
                 Button("계정 추가") { model.addAccount(flow: .browser) }
-                    .disabled(model.isBusy || model.profiles.count >= 2)
+                    .disabled(model.isBusy)
             }
             GridRow {
                 Button("Device Code 추가") { model.addAccount(flow: .deviceCode) }
-                    .disabled(model.isBusy || model.profiles.count >= 2)
-                Button("현재 계정 새로고침") { Task { await model.refreshAll() } }
+                    .disabled(model.isBusy)
+                Button("계정 정보 새로고침") { Task { await model.refreshAll() } }
                     .disabled(model.isBusy)
             }
             GridRow {

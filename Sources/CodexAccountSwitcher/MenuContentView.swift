@@ -122,14 +122,9 @@ struct MenuContentView: View {
     private var profiles: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text("등록된 계정").font(.caption).foregroundStyle(.secondary)
-            if let warning = model.oneClickSwitchAvailability.warning {
-                Label(warning, systemImage: "exclamationmark.triangle")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if !model.oneClickSwitchAvailability.isAvailable,
-                      model.oneClickSwitchAvailability.reason != "환경 확인 중",
-                      let reason = model.oneClickSwitchAvailability.reason {
+            if !model.oneClickSwitchAvailability.isAvailable,
+               model.oneClickSwitchAvailability.reason != "환경 확인 중",
+               let reason = model.oneClickSwitchAvailability.reason {
                 Label(reason, systemImage: "exclamationmark.shield")
                     .font(.caption2)
                     .foregroundStyle(.orange)

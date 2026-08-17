@@ -13,7 +13,7 @@ A local macOS menu bar companion that switches between user-owned ChatGPT/Codex 
 - 공식 Codex App Server 로그인 흐름으로 여러 계정 등록·변경
 - AES-GCM 암호화 프로필과 macOS Keychain 256비트 키
 - 사용자 승인형 CLI 종료 후 원자적 인증 전환
-- 파일 기반 인증 runtime preflight와 host-managed/keyring 안전 차단
+- 파일 기반 인증 runtime preflight, keyring 차단과 host-managed 호환 모드 경고
 - 공식 앱 정상 종료·재실행
 - 인증 교체 구간 무변경 검사, 세션 보호 스냅샷과 coordinator 자동 롤백
 - 공식 App Server 기반 사용량·초기화 시각 표시

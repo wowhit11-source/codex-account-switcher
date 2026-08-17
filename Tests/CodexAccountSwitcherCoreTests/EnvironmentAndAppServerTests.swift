@@ -105,7 +105,7 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         XCTAssertTrue(message?.contains("exit 또는 Ctrl+C") == true)
     }
 
-    func testOneClickAvailabilityRejectsHostManagedAndKeyringAuthentication() {
+    func testOneClickAvailabilityAllowsVerifiedHostManagedButRejectsKeyringAuthentication() {
         let hostManaged = AccountSwitchPreflightPolicy.evaluate(
             credentialsStoreSetting: "file",
             authFileExists: true,
@@ -119,8 +119,9 @@ final class EnvironmentAndAppServerTests: XCTestCase {
             runtimeIdentityAvailable: true
         )
 
-        XCTAssertFalse(hostManaged.isAvailable)
-        XCTAssertTrue(hostManaged.reason?.contains("호스트 관리 인증") == true)
+        XCTAssertTrue(hostManaged.isAvailable)
+        XCTAssertNil(hostManaged.reason)
+        XCTAssertTrue(hostManaged.warning?.contains("호환 모드") == true)
         XCTAssertFalse(keyring.isAvailable)
         XCTAssertTrue(keyring.reason?.contains("keyring") == true)
     }
@@ -184,7 +185,7 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         }
     }
 
-    func testAccountSwitchPreflightRejectsHostManagedAppBeforeAndAfterLaunch() async throws {
+    func testAccountSwitchPreflightAllowsVerifiedHostManagedAppBeforeAndAfterLaunch() async throws {
         let root = try TestFixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let paths = TestFixtures.paths(root: root)
@@ -206,12 +207,7 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         )
 
         for validation in [preflight.validateBeforeSwitch, preflight.validateAfterLaunch] {
-            do {
-                try await validation()
-                XCTFail("호스트 관리 인증은 원클릭 전환을 허용하면 안 됩니다")
-            } catch SwitcherError.oneClickSwitchUnavailable(let reason) {
-                XCTAssertTrue(reason.contains("호스트 관리"))
-            }
+            try await validation()
         }
     }
 

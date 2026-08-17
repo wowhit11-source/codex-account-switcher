@@ -206,7 +206,11 @@ final class AppModel: ObservableObject {
         }
         let alert = NSAlert()
         alert.messageText = "\(profile.displayName) 계정으로 전환할까요?"
-        alert.informativeText = "공식 ChatGPT/Codex 앱을 정상 종료한 뒤 인증 캐시만 교체하고 다시 실행합니다. 별도 Codex CLI가 열려 있으면 종료 승인을 한 번 더 요청합니다."
+        var explanation = "공식 ChatGPT/Codex 앱을 정상 종료한 뒤 인증 캐시만 교체하고 다시 실행합니다. 별도 Codex CLI가 열려 있으면 종료 승인을 한 번 더 요청합니다."
+        if let warning = oneClickSwitchAvailability.warning {
+            explanation += "\n\n주의: \(warning)"
+        }
+        alert.informativeText = explanation
         alert.addButton(withTitle: "전환")
         alert.addButton(withTitle: "취소")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -431,7 +435,12 @@ final class AppModel: ObservableObject {
                 rateLimits = result.rateLimits
                 lastSnapshotComparison = result.snapshotChanges
                 profiles = try await profileStore.loadProfiles()
-                oneClickSwitchAvailability = .available
+                oneClickSwitchAvailability = AccountSwitchPreflightPolicy.evaluate(
+                    credentialsStoreSetting: report.credentialsStoreSetting,
+                    authFileExists: true,
+                    officialAppAuthenticationMode: report.officialAppAuthenticationMode,
+                    runtimeIdentityAvailable: true
+                )
                 statusMessage = result.snapshotChanges.modified.isEmpty
                     ? "계정 전환 및 세션 보호 확인 완료"
                     : "계정은 전환됐고 보호 파일 변경 \(result.snapshotChanges.modified.count)건을 기록했습니다"

@@ -36,13 +36,19 @@ public enum CodexCredentialsStoreMode: Equatable, Sendable {
 public struct OneClickSwitchAvailability: Equatable, Sendable {
     public var isAvailable: Bool
     public var reason: String?
+    public var warning: String?
 
-    public init(isAvailable: Bool, reason: String? = nil) {
+    public init(isAvailable: Bool, reason: String? = nil, warning: String? = nil) {
         self.isAvailable = isAvailable
         self.reason = reason
+        self.warning = warning
     }
 
     public static let available = OneClickSwitchAvailability(isAvailable: true)
+
+    public static func availableWithWarning(_ warning: String) -> OneClickSwitchAvailability {
+        OneClickSwitchAvailability(isAvailable: true, warning: warning)
+    }
 
     public static func unavailable(_ reason: String) -> OneClickSwitchAvailability {
         OneClickSwitchAvailability(isAvailable: false, reason: reason)
@@ -56,13 +62,6 @@ public enum AccountSwitchPreflightPolicy {
         officialAppAuthenticationMode: OfficialAppAuthenticationMode,
         runtimeIdentityAvailable: Bool
     ) -> OneClickSwitchAvailability {
-        if officialAppAuthenticationMode == .hostManaged {
-            return .unavailable(
-                "공식 앱이 호스트 관리 인증을 사용해 auth.json 교체가 앱 계정 전환을 보장하지 않습니다. "
-                    + "공식 앱에서 직접 계정을 바꾸세요."
-            )
-        }
-
         switch CodexCredentialsStoreMode(configuredValue: credentialsStoreSetting) {
         case .keyring:
             return .unavailable(
@@ -80,6 +79,12 @@ public enum AccountSwitchPreflightPolicy {
         guard runtimeIdentityAvailable else {
             return .unavailable("auth.json 기반 계정을 새 Codex App Server에서 확인하지 못했습니다.")
         }
+        if officialAppAuthenticationMode == .hostManaged {
+            return .availableWithWarning(
+                "호스트 관리 인증이 감지되어 호환 모드로 전환합니다. "
+                    + "전환 후 공식 앱에서 실제 계정을 확인하세요."
+            )
+        }
         return .available
     }
 }
@@ -94,23 +99,17 @@ public struct AccountSwitchPreflight: AccountSwitchPreflighting, Sendable {
     private let officialApp: OfficialAppInfo
     private let processScanner: any CodexProcessScanning
     private let accountProbe: any AccountProbing
-    private let postLaunchObservationDuration: Duration
-    private let postLaunchPollInterval: Duration
 
     public init(
         paths: SwitcherPaths,
         officialApp: OfficialAppInfo,
         processScanner: any CodexProcessScanning,
-        accountProbe: any AccountProbing,
-        postLaunchObservationDuration: Duration = .seconds(2),
-        postLaunchPollInterval: Duration = .milliseconds(250)
+        accountProbe: any AccountProbing
     ) {
         self.paths = paths
         self.officialApp = officialApp
         self.processScanner = processScanner
         self.accountProbe = accountProbe
-        self.postLaunchObservationDuration = postLaunchObservationDuration
-        self.postLaunchPollInterval = postLaunchPollInterval
     }
 
     public func validateBeforeSwitch() async throws {
@@ -119,16 +118,6 @@ public struct AccountSwitchPreflight: AccountSwitchPreflighting, Sendable {
         let setting = CodexCredentialsStoreMode.configuredValue(at: configURL)
         let store = CodexCredentialsStoreMode(configuredValue: setting)
 
-        if mode == .hostManaged {
-            try throwUnavailable(
-                AccountSwitchPreflightPolicy.evaluate(
-                    credentialsStoreSetting: setting,
-                    authFileExists: FileManager.default.fileExists(atPath: paths.authFile.path),
-                    officialAppAuthenticationMode: mode,
-                    runtimeIdentityAvailable: false
-                )
-            )
-        }
         switch store {
         case .keyring, .unsupported:
             try throwUnavailable(
@@ -183,19 +172,9 @@ public struct AccountSwitchPreflight: AccountSwitchPreflighting, Sendable {
     }
 
     public func validateAfterLaunch() async throws {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: postLaunchObservationDuration)
-        while true {
-            guard try officialAuthenticationMode() != .hostManaged else {
-                throw SwitcherError.oneClickSwitchUnavailable(
-                    "재실행된 공식 앱이 호스트 관리 인증을 사용해 전환된 auth.json을 실제 앱 계정으로 검증할 수 없습니다."
-                )
-            }
-            guard clock.now < deadline else { return }
-            if postLaunchPollInterval > .zero {
-                try await Task.sleep(for: postLaunchPollInterval)
-            }
-        }
+        // Host-managed desktop builds are supported in compatibility mode.
+        // The transaction has already validated the replaced auth.json through a fresh App Server;
+        // the desktop account itself remains a user-visible post-switch confirmation.
     }
 
     private func officialAuthenticationMode() throws -> OfficialAppAuthenticationMode {

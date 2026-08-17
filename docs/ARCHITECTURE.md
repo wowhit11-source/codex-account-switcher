@@ -22,7 +22,7 @@ flowchart LR
 
 - `AppServerConnection`: JSONL/JSON-RPC 2.0 초기화, 요청 correlation, 알림, timeout, 오류 redaction
 - `CodexAppServerClient`: `account/read`, `account/logout`, `account/rateLimits/read`, `account/usage/read`
-- `AccountSwitchPreflight`: credential store, 파일 인증 runtime probe, 공식 앱 host-managed 인증 전·후 차단
+- `AccountSwitchPreflight`: credential store, 파일 인증 runtime probe, 공식 앱 host-managed 호환 모드 판정
 - `AccountRegistrationService`: 임시 `CODEX_HOME`, 파일 credential store, browser/device-code 로그인, 완료 알림, 즉시 암호화
 - `SystemKeychainStore` / `ProcessCachedSecretKeyStore` / `CryptoVault`: Keychain 키, 프로세스 단위 키 캐시와 AES-GCM 봉인
 - `EncryptedProfileStore`: 여러 프로필의 메타데이터와 암호문 저장
@@ -57,14 +57,12 @@ flowchart TD
     F --> G["account/read + exact identity check"]
     G --> Q["quiet manifest must be unchanged"]
     Q --> H["relaunch official app"]
-    H --> M["post-launch host-managed gate"]
-    M --> I["post snapshot and deletion gate"]
+    H --> I["post snapshot and deletion gate"]
     I --> J["complete"]
     F -->|failure| R["restore previous auth"]
     G -->|failure| R
     Q -->|protected state changed| R
     H -->|failure| R
-    M -->|host-managed detected| R
     I -->|protected file deleted| R
     R --> V["relaunch + verify restored account"]
 ```
@@ -73,4 +71,4 @@ flowchart TD
 
 ## 호스트 관리형 인증
 
-공식 앱이 `chatgptAuthTokens` 같은 호스트 관리형 인증을 사용하거나 공유 `auth.json` 변경을 무시하면 private token을 읽거나 주입하지 않습니다. 전환 전과 앱 재실행 후 모두 프로세스 모드를 검사하고, 원클릭 전환을 비활성화하거나 자동 롤백합니다. Guided Switch는 공식 앱을 열어 사용자가 앱 계정 메뉴에서 직접 전환하도록 안내합니다. 실제 데스크톱 세션 수용 여부는 Continuity Test로만 판정합니다.
+공식 앱이 `chatgptAuthTokens` 같은 호스트 관리형 인증을 사용해도 private token을 읽거나 주입하지 않습니다. 대신 유효한 파일 인증과 새 App Server의 계정 응답이 확인되면 경고를 표시하고 `auth.json` 교체를 호환 모드로 허용합니다. 별도 App Server 검증은 공식 데스크톱 호스트가 같은 계정을 수용했다는 증거가 아니므로, 사용자가 재실행된 공식 앱에서 계정을 확인해야 합니다. 실제 데스크톱 세션 수용 여부는 Continuity Test로 판정합니다.

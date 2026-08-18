@@ -170,9 +170,13 @@ final class AppModel: ObservableObject {
                 }
                 if let profile {
                     let remainsActive = profiles.first(where: { $0.id == registeredProfile.id })?.isActive == true
-                    statusMessage = remainsActive
-                        ? "\(profile.displayName)의 저장된 인증을 갱신했습니다"
-                        : "\(profile.displayName)의 저장 계정을 변경했습니다. 적용하려면 전환을 누르세요"
+                    if accountDisplayMode == .officialHostManaged {
+                        statusMessage = "\(profile.displayName)의 저장 인증을 갱신했습니다. 공식 앱 적용은 공식 로그인이 필요합니다"
+                    } else {
+                        statusMessage = remainsActive
+                            ? "\(profile.displayName)의 저장된 인증을 갱신했습니다"
+                            : "\(profile.displayName)의 저장 계정을 변경했습니다. 적용하려면 전환을 누르세요"
+                    }
                 } else {
                     statusMessage = flow == .browser
                         ? "계정을 암호화해 등록하거나 기존 인증을 갱신했습니다"
@@ -190,7 +194,9 @@ final class AppModel: ObservableObject {
     func requestAccountChange(_ profile: AccountProfile, flow: LoginFlow) {
         let alert = NSAlert()
         alert.messageText = "\(profile.displayName)의 저장 계정을 변경할까요?"
-        alert.informativeText = "공식 로그인으로 새 인증을 받은 뒤 이 프로필의 암호화된 인증만 교체합니다. 현재 사용 중인 계정은 즉시 바뀌지 않으며, 완료 후 전환 버튼을 눌러 적용합니다."
+        alert.informativeText = accountDisplayMode == .officialHostManaged
+            ? "공식 로그인으로 이 프로필의 암호화된 인증을 갱신합니다. 호스트 관리형 공식 앱 계정에는 직접 주입되지 않으므로, 완료 후 공식 로그인 버튼으로 로그아웃한 뒤 해당 계정으로 로그인해야 합니다."
+            : "공식 로그인으로 새 인증을 받은 뒤 이 프로필의 암호화된 인증만 교체합니다. 현재 사용 중인 계정은 즉시 바뀌지 않으며, 완료 후 전환 버튼을 눌러 적용합니다."
         alert.addButton(withTitle: "계정 변경")
         alert.addButton(withTitle: "취소")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -231,11 +237,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func guidedSwitch() {
+    func guidedSwitch(to targetProfile: AccountProfile? = nil) {
         let alert = NSAlert()
-        alert.messageText = "공식 로그인으로 계정을 바꿀까요?"
-        alert.informativeText = "공식 앱을 정상 종료하고 Codex의 공식 logout을 실행한 뒤 다시 엽니다. 재실행 후 사용자가 원하는 계정으로 직접 로그인해야 합니다."
-        alert.addButton(withTitle: "Guided Switch")
+        alert.messageText = targetProfile.map { "\($0.displayName) 계정으로 공식 로그인할까요?" }
+            ?? "공식 로그인으로 계정을 바꿀까요?"
+        let targetHint = targetProfile?.maskedEmail.map { " 대상 계정: \($0)." } ?? ""
+        alert.informativeText = "공식 앱의 로그아웃 메뉴를 실행한 뒤 로그인 화면을 엽니다.\(targetHint) 원하는 계정의 로그인은 공식 앱에서 직접 완료해야 하며 로컬 task와 프로젝트 파일은 삭제하지 않습니다."
+        alert.addButton(withTitle: "로그아웃 후 로그인")
         alert.addButton(withTitle: "취소")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
@@ -248,8 +256,18 @@ final class AppModel: ObservableObject {
             var madeBackup = false
             do {
                 if report.officialAppAuthenticationMode == .hostManaged {
-                    try await OfficialAppController().open(app)
-                    statusMessage = "공식 앱의 계정 메뉴에서 직접 로그아웃하거나 원하는 계정으로 로그인하세요"
+                    let appController = OfficialAppController()
+                    try await appController.open(app)
+                    try await OfficialAppAccountController().requestLogout(app)
+                    currentAccount = nil
+                    storedAccount = nil
+                    rateLimits = nil
+                    usage = nil
+                    accountDisplayMode = .officialHostManaged
+                    statusMessage = targetProfile.map {
+                        "공식 앱에서 \($0.maskedEmail ?? $0.displayName) 계정으로 로그인하세요"
+                    } ?? "공식 앱에서 원하는 계정으로 로그인하세요"
+                    SecureLogger.info("공식 앱 로그아웃 메뉴 실행 완료")
                     isBusy = false
                     return
                 }
@@ -489,6 +507,20 @@ final class AppModel: ObservableObject {
                 oneClickSwitchAvailability = .unavailable(reason)
                 statusMessage = SwitcherError.oneClickSwitchUnavailable(reason).localizedDescription
                 SecureLogger.error(statusMessage)
+            } catch SwitcherError.accountVerificationFailed(let reason) {
+                phase = .idle
+                isBusy = false
+                statusMessage = "\(profile.displayName)의 저장 인증이 만료되었거나 취소되었습니다. 이전 계정으로 복구했습니다"
+                SecureLogger.error("계정 검증 실패: \(Redactor.redact(reason))")
+                let alert = NSAlert()
+                alert.messageText = "\(profile.displayName)의 저장 인증을 갱신할까요?"
+                alert.informativeText = "전환은 취소되고 이전 계정으로 복구됐습니다. Device Code로 이 프로필의 인증을 다시 받은 뒤 재시도할 수 있습니다."
+                alert.addButton(withTitle: "Device Code로 갱신")
+                alert.addButton(withTitle: "닫기")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    addAccount(flow: .deviceCode, replacing: profile)
+                }
+                return
             } catch {
                 phase = .idle
                 statusMessage = Redactor.redact(error.localizedDescription)

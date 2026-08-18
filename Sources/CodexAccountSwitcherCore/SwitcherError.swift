@@ -11,6 +11,7 @@ public enum SwitcherError: Error, LocalizedError, Sendable {
     case activeProcessTerminationFailed([String])
     case officialAppNotFound
     case officialAppQuitTimedOut
+    case officialAppLogoutFailed(String)
     case forceQuitApprovalRequired
     case accountMismatch(expected: String, actual: String)
     case accountVerificationFailed(String)
@@ -53,6 +54,8 @@ public enum SwitcherError: Error, LocalizedError, Sendable {
             return "공식 ChatGPT/Codex 앱을 찾지 못했습니다."
         case .officialAppQuitTimedOut:
             return "공식 앱이 15초 안에 정상 종료되지 않았습니다."
+        case .officialAppLogoutFailed(let message):
+            return "공식 앱 로그아웃을 실행하지 못했습니다: \(message)"
         case .forceQuitApprovalRequired:
             return "강제 종료에는 사용자의 명시적 승인이 필요합니다."
         case .accountMismatch(let expected, let actual):

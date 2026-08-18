@@ -88,7 +88,7 @@ public final class AppServerConnection: @unchecked Sendable {
                 "clientInfo": .object([
                     "name": .string("codex_account_switcher"),
                     "title": .string("Codex Account Switcher"),
-                    "version": .string("1.0.0")
+                    "version": .string("1.0.2")
                 ]),
                 "capabilities": .object([
                     "optOutNotificationMethods": .array([

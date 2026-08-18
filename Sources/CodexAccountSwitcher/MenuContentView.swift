@@ -123,6 +123,7 @@ struct MenuContentView: View {
         VStack(alignment: .leading, spacing: 7) {
             Text("등록된 계정").font(.caption).foregroundStyle(.secondary)
             if !model.oneClickSwitchAvailability.isAvailable,
+               model.environment?.officialAppAuthenticationMode != .hostManaged,
                model.oneClickSwitchAvailability.reason != "환경 확인 중",
                let reason = model.oneClickSwitchAvailability.reason {
                 Label(reason, systemImage: "exclamationmark.shield")
@@ -169,7 +170,12 @@ struct MenuContentView: View {
             }
             Spacer()
             if !isVerifiedActive {
-                if model.oneClickSwitchAvailability.isAvailable {
+                if model.environment?.officialAppAuthenticationMode == .hostManaged {
+                    Button("공식 로그인") { model.guidedSwitch(to: profile) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(model.isBusy)
+                } else if model.oneClickSwitchAvailability.isAvailable {
                     Button("전환") { model.requestSwitch(to: profile) }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)

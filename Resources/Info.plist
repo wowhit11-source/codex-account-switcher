@@ -17,9 +17,11 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.0.2</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>3</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>공식 ChatGPT/Codex 앱의 로그아웃 메뉴를 실행해 선택한 계정으로 다시 로그인할 수 있게 합니다.</string>
     <key>LSMinimumSystemVersion</key>
     <string>15.0</string>
     <key>LSUIElement</key>

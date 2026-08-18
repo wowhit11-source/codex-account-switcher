@@ -53,6 +53,10 @@ public final class OfficialAppController: OfficialAppControlling {
     }
 
     public func open(_ app: OfficialAppInfo) async throws {
+        if let running = NSRunningApplication.runningApplications(withBundleIdentifier: app.bundleIdentifier).first {
+            running.activate(options: [.activateAllWindows])
+            return
+        }
         try await launch(app)
     }
 }

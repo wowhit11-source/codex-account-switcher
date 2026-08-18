@@ -105,7 +105,7 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         XCTAssertTrue(message?.contains("exit 또는 Ctrl+C") == true)
     }
 
-    func testOneClickAvailabilityAllowsVerifiedHostManagedButRejectsKeyringAuthentication() {
+    func testOneClickAvailabilityRejectsHostManagedAndKeyringAuthentication() {
         let hostManaged = AccountSwitchPreflightPolicy.evaluate(
             credentialsStoreSetting: "file",
             authFileExists: true,
@@ -119,9 +119,9 @@ final class EnvironmentAndAppServerTests: XCTestCase {
             runtimeIdentityAvailable: true
         )
 
-        XCTAssertTrue(hostManaged.isAvailable)
-        XCTAssertNil(hostManaged.reason)
-        XCTAssertTrue(hostManaged.warning?.contains("호환 모드") == true)
+        XCTAssertFalse(hostManaged.isAvailable)
+        XCTAssertTrue(hostManaged.reason?.contains("호스트 관리 인증") == true)
+        XCTAssertNil(hostManaged.warning)
         XCTAssertFalse(keyring.isAvailable)
         XCTAssertTrue(keyring.reason?.contains("keyring") == true)
     }
@@ -185,7 +185,7 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         }
     }
 
-    func testAccountSwitchPreflightAllowsVerifiedHostManagedAppBeforeAndAfterLaunch() async throws {
+    func testAccountSwitchPreflightRejectsVerifiedHostManagedApp() async throws {
         let root = try TestFixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let paths = TestFixtures.paths(root: root)
@@ -206,9 +206,33 @@ final class EnvironmentAndAppServerTests: XCTestCase {
             accountProbe: StaticAuthenticationProbe(identity: Self.testIdentity)
         )
 
-        for validation in [preflight.validateBeforeSwitch, preflight.validateAfterLaunch] {
-            try await validation()
+        do {
+            try await preflight.validateBeforeSwitch()
+            XCTFail("호스트 관리 인증은 auth.json 원클릭 전환을 허용하면 안 됩니다")
+        } catch SwitcherError.oneClickSwitchUnavailable(let reason) {
+            XCTAssertTrue(reason.contains("호스트 관리 인증"))
         }
+    }
+
+    func testOfficialLogoutScriptTargetsOfficialBundleAndLocalizedMenuItems() {
+        let script = OfficialAppAccountController.logoutScript(bundleIdentifier: "com.openai.codex")
+
+        XCTAssertTrue(script.contains("bundle identifier is \"com.openai.codex\""))
+        XCTAssertTrue(script.contains("\"Log Out\""))
+        XCTAssertTrue(script.contains("\"Sign Out\""))
+        XCTAssertTrue(script.contains("\"로그아웃\""))
+        XCTAssertTrue(script.contains("click menu item"))
+    }
+
+    func testOfficialLogoutPermissionFailureProvidesRecoveryPath() {
+        let message = OfficialAppAccountController.failureMessage(
+            errorNumber: -1743,
+            message: "Not authorized"
+        )
+
+        XCTAssertTrue(message.contains("자동화 권한"))
+        XCTAssertTrue(message.contains("개인정보 보호 및 보안"))
+        XCTAssertTrue(message.contains("System Events"))
     }
 
     func testProcessControllerInterruptsWrapperThenTerminatesExposedNativeChild() async throws {

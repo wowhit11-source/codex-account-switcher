@@ -30,11 +30,19 @@ Keychain이 잠겨 있거나 앱 서명/사용자 세션 문제일 수 있습니
 
 대상 프로필에 암호화 저장된 전체 이메일과 `account/read` 결과가 다르면 즉시 이전 인증으로 돌아갑니다. 프로필을 삭제하고 공식 browser/device-code 로그인으로 다시 등록하세요. 이메일 원문은 암호문 안에만 있고 일반 로그에는 마스킹됩니다.
 
+## account/read가 인증되지 않아 자동 롤백
+
+대상 프로필의 refresh token이 만료·취소되었거나 로그아웃 과정에서 폐기된 상태입니다. 이전 인증은 자동 복구됩니다. 프로필 오른쪽 `…`에서 `Device Code로 계정 변경`을 선택해 저장 인증을 갱신하세요. 파일 기반 인증 환경에서는 갱신 후 다시 전환할 수 있습니다.
+
 ## 공식 앱이 auth.json 전환을 무시함
 
-데스크톱 호스트가 자체 `chatgptAuthTokens`를 주입하는 버전일 수 있습니다. 이 모드에서도 유효한 파일 인증이 확인되면 프로필의 `전환` 버튼을 호환 모드로 제공합니다. 공식 앱을 패치하거나 private Keychain 토큰을 복사하지 않으며, 전환 후 공식 앱의 계정 메뉴에서 실제 계정이 바뀌었는지 확인하세요. 바뀌지 않았다면 `Guided Switch`로 직접 로그아웃·로그인하고, Continuity Test에서 동일 thread 후속 실행을 확인하세요.
+데스크톱 호스트가 자체 `chatgptAuthTokens`를 주입하는 버전입니다. 이 모드에서는 별도 App Server가 교체된 `auth.json`을 읽어도 공식 데스크톱 호스트 계정은 바뀌지 않습니다. Switcher는 거짓 성공을 막기 위해 원클릭을 실행하지 않고 프로필별 `공식 로그인`을 표시합니다. 이를 누르면 공식 앱의 실제 로그아웃 메뉴가 실행되며, 공식 로그인 화면에서 대상 계정 로그인을 완료해야 합니다.
 
-`cli_auth_credentials_store = "keyring"`이거나 알 수 없는 값이면 같은 이유로 원클릭 전환을 차단합니다. `file`, `auto`, 미설정 환경은 유효한 `auth.json`과 새 App Server의 실제 계정 응답이 모두 확인될 때만 허용됩니다.
+`cli_auth_credentials_store = "keyring"`이거나 알 수 없는 값이면 같은 이유로 원클릭 전환을 차단합니다. 호스트 관리가 아니면서 `file`, `auto`, 미설정인 환경은 유효한 `auth.json`과 새 App Server의 실제 계정 응답이 모두 확인될 때만 허용됩니다.
+
+## 공식 로그아웃 자동화 권한 오류
+
+처음 `공식 로그인`을 누르면 macOS가 Codex Account Switcher의 `System Events` 제어를 허용할지 물을 수 있습니다. `허용`을 선택하세요. 거부했다면 시스템 설정 > 개인정보 보호 및 보안 > 자동화에서 Codex Account Switcher 아래의 System Events를 켠 뒤 다시 시도하세요. 권한이 없으면 앱은 로그아웃을 실행하지 않습니다.
 
 ## Session Continuity가 PARTIAL 또는 FAIL
 

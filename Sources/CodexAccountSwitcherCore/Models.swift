@@ -47,6 +47,10 @@ public struct RateLimitWindow: Codable, Equatable, Sendable {
     public var windowDurationMinutes: Int?
     public var resetsAt: Date?
 
+    public var remainingPercent: Double {
+        min(max(100 - usedPercent, 0), 100)
+    }
+
     public init(usedPercent: Double, windowDurationMinutes: Int?, resetsAt: Date?) {
         self.usedPercent = usedPercent
         self.windowDurationMinutes = windowDurationMinutes

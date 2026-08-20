@@ -22,7 +22,8 @@ flowchart LR
 
 - `AppServerConnection`: JSONL/JSON-RPC 2.0 초기화, 요청 correlation, 알림, timeout, 오류 redaction
 - `CodexAppServerClient`: `account/read`, `account/logout`, `account/rateLimits/read`, `account/usage/read`
-- `AccountSwitchPreflight`: credential store, 파일 인증 runtime probe, 공식 앱 host-managed 원클릭 차단
+- `ProfileRateLimitProbe`: 암호화 프로필을 임시 `CODEX_HOME`에서 검증하고 Codex 남은 한도를 읽은 뒤 갱신 인증을 다시 봉인
+- `AccountSwitchPreflight`: credential store, 파일 인증 runtime probe, 공식 앱 host-managed 호환 모드 판정
 - `AccountRegistrationService`: 임시 `CODEX_HOME`, 파일 credential store, browser/device-code 로그인, 완료 알림, 즉시 암호화
 - `SystemKeychainStore` / `ProcessCachedSecretKeyStore` / `CryptoVault`: Keychain 키, 프로세스 단위 키 캐시와 AES-GCM 봉인
 - `EncryptedProfileStore`: 여러 프로필의 메타데이터와 암호문 저장
@@ -31,7 +32,7 @@ flowchart LR
 - `CodexProcessScanner`: 공식 앱 자식과 standalone Codex 작업 구분
 - `SessionSnapshotter`: 보호 대상의 경로·크기·수정 시각·SHA-256 비교
 - `OfficialAppController`: Bundle Identifier 기반 정상 종료, 승인된 강제 종료, NSWorkspace 재실행
-- `OfficialAppAccountController`: host-managed 환경에서 System Events로 공식 앱의 표준 로그아웃 메뉴 실행
+- `OfficialAppAccountController`: Guided Switch에서 System Events로 공식 앱의 표준 로그아웃 메뉴 실행
 - `RecoveryStore`: 마지막 정상 인증의 암호화 백업·복원
 - `ContinuityTestStore` / `SessionMarkerFinder`: CAS marker와 실제 사용자 판정 기록
 
@@ -72,4 +73,10 @@ flowchart TD
 
 ## 호스트 관리형 인증
 
-공식 앱이 `chatgptAuthTokens` 같은 호스트 관리형 인증을 사용하면 private token을 읽거나 주입하지 않고 원클릭 트랜잭션을 시작하기 전에 차단합니다. 별도 App Server 검증은 `auth.json`의 파일 인증만 증명하며 공식 데스크톱 호스트가 같은 계정을 수용했다는 증거가 아닙니다. UI는 프로필별 `공식 로그인`을 제공하고, 사용자 재확인 후 macOS `System Events`로 공식 앱의 표준 `Log Out`/`로그아웃` 메뉴를 실행합니다. 대상 계정 로그인·MFA는 공식 앱 화면에서 사용자가 완료합니다.
+공식 앱이 `chatgptAuthTokens` 같은 호스트 관리형 인증을 사용해도 private token을 읽거나 주입하지 않습니다. 대신 유효한 파일 인증과 새 App Server의 계정 응답이 확인되면 `auth.json` 교체를 호환 모드로 허용합니다. 별도 App Server 검증은 공식 데스크톱 호스트가 같은 계정을 수용했다는 증거가 아니므로, 재실행 후 실제 계정은 사용자가 확인합니다. 적용되지 않았을 때만 Guided Switch로 공식 앱의 표준 로그아웃 메뉴를 실행합니다.
+
+남은 한도 조회도 같은 경계를 지킵니다. 현재 `auth.json` 계정은 공유 `CODEX_HOME`의 새 App Server에서 직접 조회하고, 정확한 이메일이 일치하는 프로필 행에도 같은 값을 표시합니다. 등록된 나머지 프로필은 무작위 임시 홈에서 각각 `account/read`와 `account/rateLimits/read`를 실행하고 평문 인증을 즉시 제거합니다. host-managed 화면의 상단 값은 `auth.json 인증 기준`으로 표시하며 공식 앱 내부 계정의 값이라고 표시하지 않습니다. 만료되거나 검증할 수 없는 프로필은 수치를 추정하지 않고 인증 갱신 상태를 노출합니다.
+
+팝오버 생명주기에 연결된 자동 갱신 task가 열릴 때 즉시, 이후 30초 간격으로 위 한도 조회만 반복합니다. 환경 전수 검사와 세션 스냅샷은 반복하지 않으며, 팝오버가 닫혀 SwiftUI task가 취소되면 다음 조회도 중단됩니다. 계정 전환이나 복구 작업이 진행 중일 때는 자동 갱신을 건너뜁니다.
+
+전환이 시작될 때 이미 진행 중인 한도 조회가 있으면 완료될 때까지 기다린 뒤 전환 트랜잭션을 시작합니다. 대상 인증 교체 뒤에는 `account/read(refreshToken: false)`와 저장된 전체 이메일 일치로 계정을 검증합니다. 프로필 임시 홈과 공유 홈에서 같은 회전형 refresh token을 연속 강제 갱신해 정상 인증을 폐기하는 경합을 피하기 위한 불변식입니다.

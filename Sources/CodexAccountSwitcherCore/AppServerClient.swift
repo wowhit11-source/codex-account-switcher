@@ -364,7 +364,9 @@ public struct CodexAppServerClient: Sendable {
         guard let object = result.objectValue else {
             throw SwitcherError.appServer("rateLimits 응답 형식이 올바르지 않습니다")
         }
-        guard let rateValue = object["rateLimits"] else { return nil }
+        let rateValue = object["rateLimitsByLimitId"]?.objectValue?["codex"]
+            ?? object["rateLimits"]
+        guard let rateValue else { return nil }
         if rateValue == .null { return nil }
         guard let rate = rateValue.objectValue else {
             throw SwitcherError.appServer("rateLimits 본문 형식이 올바르지 않습니다")

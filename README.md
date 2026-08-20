@@ -13,11 +13,10 @@ A local macOS menu bar companion that switches between user-owned ChatGPT/Codex 
 - 공식 Codex App Server 로그인 흐름으로 여러 계정 등록·변경
 - AES-GCM 암호화 프로필과 macOS Keychain 256비트 키
 - 사용자 승인형 CLI 종료 후 원자적 인증 전환
-- 파일 기반 인증 runtime preflight와 keyring/host-managed 원클릭 차단
-- host-managed 공식 앱의 실제 로그아웃 메뉴 실행과 대상 계정 로그인 안내
+- 파일 기반 인증 runtime preflight, keyring 차단과 host-managed 호환 모드
 - 공식 앱 정상 종료·재실행
 - 인증 교체 구간 무변경 검사, 세션 보호 스냅샷과 coordinator 자동 롤백
-- 공식 App Server 기반 사용량·초기화 시각 표시
+- 공식 App Server 기반 현재 `auth.json` 계정 및 프로필별 남은 한도·초기화 시각 표시, 팝오버가 열려 있는 동안 30초 자동 갱신
 - 같은 task의 대화 맥락과 후속 작업 연속성 검증
 
 ## 빠른 시작
@@ -45,4 +44,4 @@ open "$HOME/Applications/Codex Account Switcher.app"
 
 인증 원문, 브라우저 쿠키, MFA 코드와 비공개 Keychain 항목은 읽거나 저장하지 않습니다.
 
-> **중요:** 공식 데스크톱 앱이 `features.code_mode_host=true`로 호스트 관리 인증을 사용하는 버전에서는 `auth.json` 교체가 공식 앱 계정을 바꾸지 않습니다. 이 경우 프로필의 `공식 로그인`은 공식 앱의 로그아웃 메뉴를 실행하고 로그인 화면으로 이동합니다. 대상 계정 로그인과 MFA는 사용자가 공식 화면에서 완료해야 합니다.
+> **중요:** 공식 데스크톱 앱이 `features.code_mode_host=true`로 호스트 관리 인증을 사용하는 버전에서는 호환 모드로 인증 전환을 시도합니다. 공식 호스트가 교체된 `auth.json`을 수용하지 않을 수 있으므로 재실행 후 실제 계정을 확인하고, 적용되지 않았을 때만 `Guided Switch`를 사용하세요.

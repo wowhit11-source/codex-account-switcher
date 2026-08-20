@@ -50,6 +50,24 @@ final class IntegrationSwitchTests: XCTestCase {
     }
 
     @MainActor
+    func testCoordinatorVerifiesTargetWithoutForcingSecondTokenRefresh() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let probe = SequenceAccountProbe(results: [fixture.identityA, fixture.identityB])
+        let appController = FakeOfficialAppController()
+        let coordinator = makeCoordinator(fixture: fixture, probe: probe, appController: appController)
+
+        let result = try await coordinator.switchAccount(to: fixture.accountB.id) { _ in }
+        let refreshRequests = await probe.refreshTokenRequests()
+        let activeProfileID = try await fixture.store.loadProfiles().first(where: \.isActive)?.id
+
+        XCTAssertEqual(result.account, fixture.identityB)
+        XCTAssertEqual(refreshRequests, [true, false])
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.authFile), fixture.authenticationB)
+        XCTAssertEqual(activeProfileID, fixture.accountB.id)
+    }
+
+    @MainActor
     func testCoordinatorRestoresPreviousAuthenticationWhenTargetVerificationFails() async throws {
         let fixture = try await makeCoordinatorFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -284,6 +302,7 @@ private struct CoordinatorFixture: Sendable {
 private actor SequenceAccountProbe: AccountProbing {
     private var results: [AccountIdentity?]
     private var readCount = 0
+    private var refreshRequests: [Bool] = []
     private let onRead: (@Sendable (Int) throws -> Void)?
 
     init(results: [AccountIdentity?], onRead: (@Sendable (Int) throws -> Void)? = nil) {
@@ -293,9 +312,14 @@ private actor SequenceAccountProbe: AccountProbing {
 
     func readAccount(refreshToken: Bool) async throws -> AccountIdentity? {
         readCount += 1
+        refreshRequests.append(refreshToken)
         try onRead?(readCount)
         guard !results.isEmpty else { return nil }
         return results.removeFirst()
+    }
+
+    func refreshTokenRequests() -> [Bool] {
+        refreshRequests
     }
 
     func readRateLimits() async throws -> AccountRateLimits? {

@@ -134,7 +134,11 @@ public final class AccountSwitchCoordinator {
             authenticationChanged = true
 
             onPhase(.validatingAccount)
-            guard let targetIdentity = try await accountProbe.readAccount(refreshToken: true) else {
+            // The encrypted profile already preserves the latest auth.json emitted by
+            // its isolated App Server probe. Forcing another refresh here can invalidate
+            // a rotating refresh token between the isolated and shared homes, making a
+            // usable profile look logged out immediately after replacement.
+            guard let targetIdentity = try await accountProbe.readAccount(refreshToken: false) else {
                 throw SwitcherError.accountVerificationFailed("account/read가 인증되지 않은 상태를 반환했습니다")
             }
             try verify(identity: targetIdentity, matches: targetSecret)

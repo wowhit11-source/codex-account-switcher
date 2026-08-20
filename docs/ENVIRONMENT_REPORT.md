@@ -22,7 +22,7 @@
 | 메서드 | 공개 가능한 결과 |
 |---|---|
 | `account/read(refreshToken: false)` | ChatGPT 관리형 계정, 마스킹 이메일과 plan type 반환 |
-| `account/rateLimits/read` | primary/secondary 사용률과 초기화 시각 반환 |
+| `account/rateLimits/read` | Codex bucket의 primary/secondary 사용률, 창 길이와 초기화 시각 반환 |
 | `account/usage/read` | 지원되는 환경에서 활동 summary 반환 |
 
 앱은 허용된 필드만 파싱하고 이메일은 일반 로그에 기록하기 전에 마스킹합니다. 계정별 사용량 숫자는 이 공개 문서에 저장하지 않습니다.
@@ -59,26 +59,27 @@
 | AES-GCM 암호화 프로필 | 사용 가능 |
 | Keychain 256비트 키 | 사용 가능 |
 | 프로세스 단위 Keychain 키 캐시 | 사용 가능 |
-| 사용량 표시 | App Server 응답이 있는 경우 사용 가능 |
+| 현재 인증·프로필별 남은 한도 표시 | 공유 `auth.json` 계정과 격리된 임시 `CODEX_HOME`의 App Server 응답이 있는 경우 사용 가능; 팝오버 열림 중 30초 자동 갱신; 만료 프로필은 갱신 필요 표시 |
 | 인증만 교체하고 로컬 상태 공유 | 자동 테스트와 실제 전환에서 확인 |
 | 동일 task 후속 작업 | 실제 두 계정 전환에서 확인 |
 
-2026-08-18 재검증에서 공식 앱 26.814 계열은 `features.code_mode_host=true`로 실행됐고, `auth.json` 교체만으로 공식 데스크톱 계정이 바뀌지 않았습니다. 이 환경에서는 호환 모드를 허용하지 않고 원클릭을 차단합니다. 프로필별 `공식 로그인`은 macOS가 노출한 공식 앱의 로그아웃 메뉴를 실행하고 대상 계정 로그인을 안내합니다.
+2026-08-18 재검증에서 공식 앱 26.814 계열은 `features.code_mode_host=true`로 실행됐고, 한 시도에서는 `auth.json` 교체 후 공식 데스크톱 계정이 바뀌지 않았습니다. 제품의 핵심 전환 흐름은 유지하되, 유효한 파일 인증이 확인된 경우에만 호환 모드로 `전환`을 허용하고 재실행 후 실제 계정 확인을 요구합니다. 적용되지 않았을 때는 `Guided Switch`를 사용합니다.
 
 ## 빌드·런타임 검증
 
 | 검증 | 결과 |
 |---|---|
-| `scripts/test.sh` | 42 tests, 0 failures |
+| `scripts/test.sh` | 44 tests, 0 failures |
 | 가짜 `CODEX_HOME` 10회 전환 | 통과 |
 | coordinator 대상 검증·재실행·세션 삭제 실패 자동 롤백 | 통과 |
+| 대상 적용 검증의 중복 refresh 금지 회귀 테스트 | 통과 |
 | 인증 교체 조용한 구간 보호 상태 무변경 검사 | 통과 |
 | 롤백 시 앱 종료 실패에서 인증 재기록 금지 | 통과 |
 | wrapper/native CLI 종료 흐름 | 통과 |
 | Keychain 원본 조회 중복 방지 | 통과 |
 | `scripts/build.sh` Release | 통과 |
 | 앱 번들 검증 | `codesign --verify --deep --strict` 통과 |
-| 실제 A→B 계정 전환 | 파일 기반 인증 버전에서 통과; host-managed 26.814에서는 무로그인 원클릭 미지원 |
+| 실제 A→B 계정 전환 | 파일 기반 인증 버전에서 통과; host-managed 26.814는 호환 모드이며 결과 확인 필요 |
 | 공식 앱 재실행 | 통과 |
 | 동일 task 대화 맥락과 후속 코드 작업 | 통과 |
 

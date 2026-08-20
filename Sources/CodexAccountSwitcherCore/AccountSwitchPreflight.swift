@@ -80,8 +80,9 @@ public enum AccountSwitchPreflightPolicy {
             return .unavailable("auth.json 기반 계정을 새 Codex App Server에서 확인하지 못했습니다.")
         }
         if officialAppAuthenticationMode == .hostManaged {
-            return .unavailable(
-                "공식 앱이 호스트 관리 인증을 사용해 auth.json 교체만으로는 데스크톱 계정을 바꿀 수 없습니다."
+            return .availableWithWarning(
+                "호스트 관리 인증이 감지되어 호환 모드로 전환합니다. "
+                    + "전환 후 공식 앱에서 실제 계정을 확인하세요."
             )
         }
         return .available
@@ -171,8 +172,9 @@ public struct AccountSwitchPreflight: AccountSwitchPreflighting, Sendable {
     }
 
     public func validateAfterLaunch() async throws {
-        // Host-managed builds are rejected before the transaction starts. For file-backed
-        // authentication, target identity is verified before launch by a fresh App Server.
+        // Host-managed desktop builds are supported in compatibility mode.
+        // The replaced auth.json is verified through a fresh App Server before launch;
+        // the desktop account itself remains a user-visible post-switch confirmation.
     }
 
     private func officialAuthenticationMode() throws -> OfficialAppAuthenticationMode {

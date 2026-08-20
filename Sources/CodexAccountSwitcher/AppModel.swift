@@ -10,6 +10,12 @@ enum AccountDisplayMode: Equatable {
     case switchVerified
 }
 
+struct ProfileRateLimitStatus: Equatable, Sendable {
+    var account: AccountIdentity
+    var rateLimits: AccountRateLimits
+    var checkedAt: Date
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var environment: EnvironmentReport?
@@ -18,6 +24,11 @@ final class AppModel: ObservableObject {
     @Published var storedAccount: AccountIdentity?
     @Published var accountDisplayMode: AccountDisplayMode = .checking
     @Published var rateLimits: AccountRateLimits?
+    @Published var rateLimitProfileID: UUID?
+    @Published var profileRateLimits: [UUID: ProfileRateLimitStatus] = [:]
+    @Published var profileRateLimitFailures: [UUID: String] = [:]
+    @Published var lastRateLimitRefreshAt: Date?
+    @Published var isRefreshingRateLimits = false
     @Published var usage: AccountUsageSummary?
     @Published var phase: SwitchPhase = .idle
     @Published var statusMessage = "환경 확인 대기 중"
@@ -49,6 +60,10 @@ final class AppModel: ObservableObject {
         currentAccount = nil
         storedAccount = nil
         rateLimits = nil
+        rateLimitProfileID = nil
+        profileRateLimits = [:]
+        profileRateLimitFailures = [:]
+        lastRateLimitRefreshAt = nil
         usage = nil
         oneClickSwitchAvailability = .unavailable("환경 확인 중")
         statusMessage = "현재 환경 확인 중"
@@ -58,11 +73,8 @@ final class AppModel: ObservableObject {
             profiles = try await profileStore.loadProfiles()
             continuityRecord = try await continuityStore.load()
             if report.officialAppAuthenticationMode == .hostManaged {
-                if let client = appServerClient(from: report) {
-                    storedAccount = try? await client.readAccount(refreshToken: false)
-                }
                 accountDisplayMode = .officialHostManaged
-                statusMessage = "공식 앱은 호스트 관리 인증을 사용 중입니다. 현재 계정과 사용량은 공식 앱에서 확인하세요"
+                statusMessage = "공식 앱은 호스트 관리 인증을 사용 중입니다. auth.json 계정 한도를 확인합니다"
                 SecureLogger.info("공식 앱 호스트 관리 인증 감지: auth.json 계정을 현재 계정으로 표시하지 않음")
             } else if let client = appServerClient(from: report) {
                 let identity = try await client.readAccount(refreshToken: false)
@@ -87,6 +99,16 @@ final class AppModel: ObservableObject {
                 accountDisplayMode = .storedAuthentication
                 statusMessage = "Codex App Server 실행 파일을 찾지 못했습니다"
             }
+            if let binary = binaryURL(from: report) {
+                await refreshProfileRateLimits(binaryURL: binary)
+                if report.officialAppAuthenticationMode == .hostManaged {
+                    await refreshHostManagedRateLimitReference(using: report)
+                    statusMessage = rateLimits == nil && profileRateLimits.isEmpty
+                        ? "공식 앱 현재 계정과 사용량은 공식 앱에서 확인하세요"
+                        : "공식 앱 현재 계정은 앱에서 확인하세요. auth.json 및 저장 프로필 한도를 새로고침했습니다"
+                }
+                lastRateLimitRefreshAt = Date()
+            }
         } catch {
             accountDisplayMode = report.officialAppAuthenticationMode == .hostManaged
                 ? .officialHostManaged
@@ -101,6 +123,44 @@ final class AppModel: ObservableObject {
             runtimeIdentityAvailable: storedAccount != nil
         )
         isBusy = false
+    }
+
+    /// Keeps the visible quota values fresh without repeating the heavier
+    /// environment inspection. SwiftUI cancels this task when the popover
+    /// content disappears, and starts it again on the next open.
+    func runAutomaticRateLimitRefresh() async {
+        await bootstrap()
+        await refreshRateLimits()
+
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: .seconds(30))
+            } catch {
+                return
+            }
+            await refreshRateLimits()
+        }
+    }
+
+    func refreshRateLimits() async {
+        guard
+            !isBusy,
+            !isRefreshingRateLimits,
+            let report = environment,
+            let binary = binaryURL(from: report)
+        else { return }
+
+        isRefreshingRateLimits = true
+        defer { isRefreshingRateLimits = false }
+
+        await refreshProfileRateLimits(binaryURL: binary)
+        if report.officialAppAuthenticationMode == .hostManaged {
+            await refreshHostManagedRateLimitReference(using: report)
+        } else {
+            await refreshStoredAuthenticationRateLimitReference(using: report)
+        }
+        lastRateLimitRefreshAt = Date()
+        SecureLogger.info("Codex 한도 자동 새로고침 완료")
     }
 
     func captureCurrentAccount() {
@@ -135,6 +195,12 @@ final class AppModel: ObservableObject {
                 )
                 try await profileStore.markActive(profile.id, identity: identity)
                 profiles = try await profileStore.loadProfiles()
+                if let report = environment, let binary = binaryURL(from: report) {
+                    await refreshProfileRateLimits(binaryURL: binary)
+                    if report.officialAppAuthenticationMode == .hostManaged {
+                        await refreshHostManagedRateLimitReference(using: report)
+                    }
+                }
                 statusMessage = matchingProfile == nil
                     ? "auth.json의 저장 계정을 암호화해 등록했습니다"
                     : "auth.json에 저장된 인증을 갱신했습니다"
@@ -170,17 +236,17 @@ final class AppModel: ObservableObject {
                 }
                 if let profile {
                     let remainsActive = profiles.first(where: { $0.id == registeredProfile.id })?.isActive == true
-                    if accountDisplayMode == .officialHostManaged {
-                        statusMessage = "\(profile.displayName)의 저장 인증을 갱신했습니다. 공식 앱 적용은 공식 로그인이 필요합니다"
-                    } else {
-                        statusMessage = remainsActive
-                            ? "\(profile.displayName)의 저장된 인증을 갱신했습니다"
-                            : "\(profile.displayName)의 저장 계정을 변경했습니다. 적용하려면 전환을 누르세요"
-                    }
+                    statusMessage = remainsActive
+                        ? "\(profile.displayName)의 저장된 인증을 갱신했습니다"
+                        : "\(profile.displayName)의 저장 계정을 변경했습니다. 적용하려면 전환을 누르세요"
                 } else {
                     statusMessage = flow == .browser
                         ? "계정을 암호화해 등록하거나 기존 인증을 갱신했습니다"
                         : "계정을 등록하거나 갱신했습니다. Device Code는 클립보드에 복사했습니다"
+                }
+                await refreshProfileRateLimits(binaryURL: binary)
+                if report.officialAppAuthenticationMode == .hostManaged {
+                    await refreshHostManagedRateLimitReference(using: report)
                 }
                 SecureLogger.info(profile == nil ? "공식 로그인 프로필 등록 성공" : "공식 로그인 프로필 교체 성공")
             } catch {
@@ -194,9 +260,7 @@ final class AppModel: ObservableObject {
     func requestAccountChange(_ profile: AccountProfile, flow: LoginFlow) {
         let alert = NSAlert()
         alert.messageText = "\(profile.displayName)의 저장 계정을 변경할까요?"
-        alert.informativeText = accountDisplayMode == .officialHostManaged
-            ? "공식 로그인으로 이 프로필의 암호화된 인증을 갱신합니다. 호스트 관리형 공식 앱 계정에는 직접 주입되지 않으므로, 완료 후 공식 로그인 버튼으로 로그아웃한 뒤 해당 계정으로 로그인해야 합니다."
-            : "공식 로그인으로 새 인증을 받은 뒤 이 프로필의 암호화된 인증만 교체합니다. 현재 사용 중인 계정은 즉시 바뀌지 않으며, 완료 후 전환 버튼을 눌러 적용합니다."
+        alert.informativeText = "공식 로그인으로 새 인증을 받은 뒤 이 프로필의 암호화된 인증만 교체합니다. 현재 사용 중인 계정은 즉시 바뀌지 않으며, 완료 후 전환 버튼을 눌러 적용합니다."
         alert.addButton(withTitle: "계정 변경")
         alert.addButton(withTitle: "취소")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -204,6 +268,10 @@ final class AppModel: ObservableObject {
     }
 
     func requestSwitch(to profile: AccountProfile) {
+        guard !isBusy else {
+            statusMessage = "다른 작업이 끝난 뒤 다시 전환하세요"
+            return
+        }
         guard oneClickSwitchAvailability.isAvailable else {
             statusMessage = SwitcherError.oneClickSwitchUnavailable(
                 oneClickSwitchAvailability.reason ?? "인증 저장 방식을 확인할 수 없습니다."
@@ -262,6 +330,7 @@ final class AppModel: ObservableObject {
                     currentAccount = nil
                     storedAccount = nil
                     rateLimits = nil
+                    rateLimitProfileID = nil
                     usage = nil
                     accountDisplayMode = .officialHostManaged
                     statusMessage = targetProfile.map {
@@ -293,6 +362,7 @@ final class AppModel: ObservableObject {
                 storedAccount = nil
                 accountDisplayMode = .officialHostManaged
                 rateLimits = nil
+                rateLimitProfileID = nil
                 statusMessage = "공식 앱에서 원하는 계정으로 직접 로그인한 뒤 새로고침하세요"
             } catch {
                 if madeBackup {
@@ -409,6 +479,12 @@ final class AppModel: ObservableObject {
             do {
                 try await profileStore.delete(profile.id)
                 profiles = try await profileStore.loadProfiles()
+                profileRateLimits[profile.id] = nil
+                profileRateLimitFailures[profile.id] = nil
+                if rateLimitProfileID == profile.id {
+                    rateLimitProfileID = nil
+                    rateLimits = nil
+                }
                 statusMessage = "프로필을 삭제했습니다"
             } catch {
                 statusMessage = Redactor.redact(error.localizedDescription)
@@ -421,16 +497,27 @@ final class AppModel: ObservableObject {
         forceQuitApproved: Bool,
         closeConflictingProcessesApproved: Bool
     ) {
+        guard !isBusy else {
+            statusMessage = "다른 작업이 끝난 뒤 다시 전환하세요"
+            return
+        }
+        isBusy = true
         Task {
+            if isRefreshingRateLimits {
+                statusMessage = "한도 갱신 완료 후 계정 전환을 시작합니다"
+            }
+            while isRefreshingRateLimits && !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
             guard
                 let report = environment,
                 let app = report.officialApp,
                 let client = appServerClient(from: report)
             else {
                 statusMessage = "공식 앱 또는 App Server를 찾지 못했습니다"
+                isBusy = false
                 return
             }
-            isBusy = true
             do {
                 let coordinator = AccountSwitchCoordinator(
                     paths: paths,
@@ -451,6 +538,14 @@ final class AppModel: ObservableObject {
                 storedAccount = result.account
                 accountDisplayMode = .switchVerified
                 rateLimits = result.rateLimits
+                rateLimitProfileID = profile.id
+                if let limits = result.rateLimits {
+                    profileRateLimits[profile.id] = ProfileRateLimitStatus(
+                        account: result.account,
+                        rateLimits: limits,
+                        checkedAt: Date()
+                    )
+                }
                 lastSnapshotComparison = result.snapshotChanges
                 profiles = try await profileStore.loadProfiles()
                 oneClickSwitchAvailability = AccountSwitchPreflightPolicy.evaluate(
@@ -510,8 +605,9 @@ final class AppModel: ObservableObject {
             } catch SwitcherError.accountVerificationFailed(let reason) {
                 phase = .idle
                 isBusy = false
-                statusMessage = "\(profile.displayName)의 저장 인증이 만료되었거나 취소되었습니다. 이전 계정으로 복구했습니다"
-                SecureLogger.error("계정 검증 실패: \(Redactor.redact(reason))")
+                let safeReason = Redactor.redact(reason)
+                statusMessage = "\(profile.displayName) 적용 검증 실패: \(safeReason). 이전 계정으로 복구했습니다"
+                SecureLogger.error("계정 검증 실패: \(safeReason)")
                 let alert = NSAlert()
                 alert.messageText = "\(profile.displayName)의 저장 인증을 갱신할까요?"
                 alert.informativeText = "전환은 취소되고 이전 계정으로 복구됐습니다. Device Code로 이 프로필의 인증을 다시 받은 뒤 재시도할 수 있습니다."
@@ -541,6 +637,115 @@ final class AppModel: ObservableObject {
                 return
             }
         }
+    }
+
+    private func refreshProfileRateLimits(binaryURL: URL) async {
+        let targetProfiles = profiles
+        let store = profileStore
+        let outcomes = await withTaskGroup(
+            of: (UUID, ProfileRateLimitProbeResult?, String?).self,
+            returning: [(UUID, ProfileRateLimitProbeResult?, String?)].self
+        ) { group in
+            for profile in targetProfiles {
+                group.addTask {
+                    do {
+                        let secret = try await store.secret(for: profile.id)
+                        let result = try await ProfileRateLimitProbe(binaryURL: binaryURL).read(secret: secret)
+                        try await store.updateCachedAuthentication(
+                            profileID: profile.id,
+                            authCache: result.refreshedAuthCache,
+                            identity: result.account
+                        )
+                        return (profile.id, result, nil)
+                    } catch {
+                        return (profile.id, nil, Redactor.redact(error.localizedDescription))
+                    }
+                }
+            }
+
+            var collected: [(UUID, ProfileRateLimitProbeResult?, String?)] = []
+            for await outcome in group {
+                collected.append(outcome)
+            }
+            return collected
+        }
+
+        var refreshed: [UUID: ProfileRateLimitStatus] = [:]
+        var failures: [UUID: String] = [:]
+        for (profileID, result, errorMessage) in outcomes {
+            if let result, let limits = result.rateLimits {
+                refreshed[profileID] = ProfileRateLimitStatus(
+                    account: result.account,
+                    rateLimits: limits,
+                    checkedAt: result.checkedAt
+                )
+            } else if let result {
+                failures[profileID] = "한도 응답 없음"
+                if let errorMessage = result.rateLimitErrorDescription {
+                    SecureLogger.error("저장 프로필 한도 응답 실패 id=\(profileID.uuidString) error=\(errorMessage)")
+                }
+            } else if let errorMessage {
+                failures[profileID] = "인증 갱신 필요"
+                SecureLogger.error("저장 프로필 한도 조회 실패 id=\(profileID.uuidString) error=\(errorMessage)")
+            }
+        }
+        profileRateLimits = refreshed
+        profileRateLimitFailures = failures
+        if let reloaded = try? await profileStore.loadProfiles() {
+            profiles = reloaded
+        }
+    }
+
+    private func refreshHostManagedRateLimitReference(using report: EnvironmentReport) async {
+        await refreshAuthenticationFileRateLimitReference(using: report, updatesCurrentAccount: false)
+    }
+
+    private func refreshStoredAuthenticationRateLimitReference(using report: EnvironmentReport) async {
+        await refreshAuthenticationFileRateLimitReference(using: report, updatesCurrentAccount: true)
+    }
+
+    private func refreshAuthenticationFileRateLimitReference(
+        using report: EnvironmentReport,
+        updatesCurrentAccount: Bool
+    ) async {
+        guard let client = appServerClient(from: report) else {
+            return
+        }
+
+        let account: AccountIdentity
+        let authenticationFileLimits: AccountRateLimits?
+        do {
+            guard let refreshedAccount = try await client.readAccount(refreshToken: false) else {
+                return
+            }
+            account = refreshedAccount
+            authenticationFileLimits = try await client.readRateLimits()
+        } catch {
+            SecureLogger.error("auth.json 계정 한도 새로고침 실패: \(Redactor.redact(error.localizedDescription))")
+            return
+        }
+
+        storedAccount = account
+        if updatesCurrentAccount {
+            currentAccount = account
+        }
+        rateLimits = authenticationFileLimits
+        rateLimitProfileID = nil
+
+        guard
+            let authenticationFileLimits,
+            let email = account.email,
+            let profile = try? await profileStore.profile(matchingAccountEmail: email)
+        else { return }
+
+        rateLimitProfileID = profile.id
+        profileRateLimits[profile.id] = ProfileRateLimitStatus(
+            account: account,
+            rateLimits: authenticationFileLimits,
+            checkedAt: Date()
+        )
+        profileRateLimitFailures[profile.id] = nil
+        SecureLogger.info("auth.json 계정 한도 조회 성공 profile=\(profile.id.uuidString)")
     }
 
     private func binaryURL(from report: EnvironmentReport) -> URL? {

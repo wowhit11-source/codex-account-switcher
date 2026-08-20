@@ -22,7 +22,7 @@ struct MenuContentView: View {
         }
         .padding(14)
         .frame(width: 360)
-        .task { await model.bootstrap() }
+        .task { await model.runAutomaticRateLimitRefresh() }
     }
 
     private var header: some View {
@@ -97,25 +97,62 @@ struct MenuContentView: View {
 
     private var usage: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("Codex 사용량").font(.caption).foregroundStyle(.secondary)
-            if model.accountDisplayMode == .officialHostManaged {
-                Text("공식 앱 내부 계정의 사용량은 공식 앱에서 확인하세요")
+            HStack(spacing: 5) {
+                Text("Codex 남은 한도")
+                Spacer()
+                if model.isRefreshingRateLimits {
+                    ProgressView().controlSize(.mini)
+                    Text("갱신 중")
+                } else if let refreshedAt = model.lastRateLimitRefreshAt {
+                    Text("30초 자동 · \(refreshedAt.formatted(date: .omitted, time: .standard))")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            if let primary = model.rateLimits?.primary {
+                if model.environment?.officialAppAuthenticationMode == .hostManaged {
+                    Text(usageReferenceText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                rateLimitWindow(primary, fallbackName: "단기")
+                if let secondary = model.rateLimits?.secondary {
+                    rateLimitWindow(secondary, fallbackName: "장기")
+                }
+            } else if model.accountDisplayMode == .officialHostManaged,
+                      !model.profileRateLimits.isEmpty {
+                Text("auth.json 계정 한도는 없으며 아래에 저장 프로필별 한도를 표시합니다")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else if let primary = model.rateLimits?.primary {
-                ProgressView(value: min(max(primary.usedPercent, 0), 100), total: 100)
-                HStack {
-                    Text("Primary 사용 \(primary.usedPercent, specifier: "%.0f")%")
-                    Spacer()
-                    if let reset = primary.resetsAt {
-                        Text("초기화 \(reset, style: .relative)")
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
             } else {
-                Text("사용량 정보 없음").font(.caption).foregroundStyle(.secondary)
+                Text("남은 한도 정보 없음").font(.caption).foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var usageReferenceText: String {
+        guard
+            let profileID = model.rateLimitProfileID,
+            let profile = model.profiles.first(where: { $0.id == profileID })
+        else {
+            return "auth.json 인증 기준 · 공식 앱 현재 계정과 다를 수 있음"
+        }
+        return "\(profile.displayName) auth.json 인증 기준 · 공식 앱 현재 계정과 다를 수 있음"
+    }
+
+    private func rateLimitWindow(_ window: RateLimitWindow, fallbackName: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ProgressView(value: window.remainingPercent, total: 100)
+            HStack {
+                Text("\(windowName(window, fallback: fallbackName)) \(window.remainingPercent, specifier: "%.0f")% 남음")
+                Spacer()
+                if let reset = window.resetsAt {
+                    Text("초기화 \(reset, style: .relative)")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
     }
 
@@ -123,7 +160,6 @@ struct MenuContentView: View {
         VStack(alignment: .leading, spacing: 7) {
             Text("등록된 계정").font(.caption).foregroundStyle(.secondary)
             if !model.oneClickSwitchAvailability.isAvailable,
-               model.environment?.officialAppAuthenticationMode != .hostManaged,
                model.oneClickSwitchAvailability.reason != "환경 확인 중",
                let reason = model.oneClickSwitchAvailability.reason {
                 Label(reason, systemImage: "exclamationmark.shield")
@@ -167,19 +203,24 @@ struct MenuContentView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
+                if let summary = profileRateLimitSummary(profile) {
+                    Text(summary)
+                        .font(.caption2)
+                        .foregroundStyle(.blue)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let failure = model.profileRateLimitFailures[profile.id] {
+                    Text(failure)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
             }
             Spacer()
             if !isVerifiedActive {
-                if model.environment?.officialAppAuthenticationMode == .hostManaged {
-                    Button("공식 로그인") { model.guidedSwitch(to: profile) }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(model.isBusy)
-                } else if model.oneClickSwitchAvailability.isAvailable {
+                if model.oneClickSwitchAvailability.isAvailable {
                     Button("전환") { model.requestSwitch(to: profile) }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
-                        .disabled(model.isBusy)
+                        .disabled(model.isBusy || model.isRefreshingRateLimits)
                 } else {
                     Text("원클릭 불가")
                         .font(.caption2)
@@ -200,8 +241,37 @@ struct MenuContentView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .disabled(model.isBusy)
+            .disabled(model.isBusy || model.isRefreshingRateLimits)
         }
+    }
+
+    private func profileRateLimitSummary(_ profile: AccountProfile) -> String? {
+        guard let limits = model.profileRateLimits[profile.id]?.rateLimits else { return nil }
+        let windows = [
+            limits.primary.map { compactWindow($0, fallback: "단기") },
+            limits.secondary.map { compactWindow($0, fallback: "장기") }
+        ].compactMap { $0 }
+        return windows.isEmpty ? nil : windows.joined(separator: " · ")
+    }
+
+    private func compactWindow(_ window: RateLimitWindow, fallback: String) -> String {
+        "\(windowName(window, fallback: fallback).replacingOccurrences(of: " 창", with: "")) \(Int(window.remainingPercent.rounded()))% 남음"
+    }
+
+    private func windowName(_ window: RateLimitWindow, fallback: String) -> String {
+        guard let minutes = window.windowDurationMinutes, minutes > 0 else {
+            return "\(fallback) 한도"
+        }
+        if minutes.isMultiple(of: 10_080) {
+            return "\(minutes / 10_080)주 창"
+        }
+        if minutes.isMultiple(of: 1_440) {
+            return "\(minutes / 1_440)일 창"
+        }
+        if minutes.isMultiple(of: 60) {
+            return "\(minutes / 60)시간 창"
+        }
+        return "\(minutes)분 창"
     }
 
     private var controls: some View {

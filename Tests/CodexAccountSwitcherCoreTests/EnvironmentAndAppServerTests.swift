@@ -105,7 +105,7 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         XCTAssertTrue(message?.contains("exit 또는 Ctrl+C") == true)
     }
 
-    func testOneClickAvailabilityRejectsHostManagedAndKeyringAuthentication() {
+    func testOneClickAvailabilityAllowsVerifiedHostManagedButRejectsKeyringAuthentication() {
         let hostManaged = AccountSwitchPreflightPolicy.evaluate(
             credentialsStoreSetting: "file",
             authFileExists: true,
@@ -119,9 +119,9 @@ final class EnvironmentAndAppServerTests: XCTestCase {
             runtimeIdentityAvailable: true
         )
 
-        XCTAssertFalse(hostManaged.isAvailable)
-        XCTAssertTrue(hostManaged.reason?.contains("호스트 관리 인증") == true)
-        XCTAssertNil(hostManaged.warning)
+        XCTAssertTrue(hostManaged.isAvailable)
+        XCTAssertNil(hostManaged.reason)
+        XCTAssertTrue(hostManaged.warning?.contains("호환 모드") == true)
         XCTAssertFalse(keyring.isAvailable)
         XCTAssertTrue(keyring.reason?.contains("keyring") == true)
     }
@@ -185,7 +185,7 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         }
     }
 
-    func testAccountSwitchPreflightRejectsVerifiedHostManagedApp() async throws {
+    func testAccountSwitchPreflightAllowsVerifiedHostManagedAppBeforeAndAfterLaunch() async throws {
         let root = try TestFixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let paths = TestFixtures.paths(root: root)
@@ -206,11 +206,8 @@ final class EnvironmentAndAppServerTests: XCTestCase {
             accountProbe: StaticAuthenticationProbe(identity: Self.testIdentity)
         )
 
-        do {
-            try await preflight.validateBeforeSwitch()
-            XCTFail("호스트 관리 인증은 auth.json 원클릭 전환을 허용하면 안 됩니다")
-        } catch SwitcherError.oneClickSwitchUnavailable(let reason) {
-            XCTAssertTrue(reason.contains("호스트 관리 인증"))
+        for validation in [preflight.validateBeforeSwitch, preflight.validateAfterLaunch] {
+            try await validation()
         }
     }
 
@@ -350,6 +347,44 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         let parsed = try CodexAppServerClient.parseRateLimits(rates)
         XCTAssertEqual(parsed?.primary?.usedPercent, 74)
         XCTAssertEqual(parsed?.primary?.windowDurationMinutes, 1_008)
+        XCTAssertEqual(parsed?.primary?.remainingPercent, 26)
+    }
+
+    func testRateLimitParsingPrefersCodexMultiBucketAndClampsRemainingPercent() throws {
+        let rates: JSONValue = .object([
+            "rateLimits": .object([
+                "limitId": .string("legacy"),
+                "primary": .object(["usedPercent": .number(90)])
+            ]),
+            "rateLimitsByLimitId": .object([
+                "codex": .object([
+                    "limitId": .string("codex"),
+                    "planType": .string("pro"),
+                    "primary": .object([
+                        "usedPercent": .number(25),
+                        "windowDurationMins": .number(300),
+                        "resetsAt": .number(1_800_000_000)
+                    ]),
+                    "secondary": .object([
+                        "usedPercent": .number(110),
+                        "windowDurationMins": .number(10_080)
+                    ])
+                ]),
+                "codex_other": .object([
+                    "limitId": .string("codex_other"),
+                    "primary": .object(["usedPercent": .number(42)])
+                ])
+            ])
+        ])
+
+        let parsed = try XCTUnwrap(CodexAppServerClient.parseRateLimits(rates))
+        XCTAssertEqual(parsed.limitID, "codex")
+        XCTAssertEqual(parsed.primary?.remainingPercent, 75)
+        XCTAssertEqual(parsed.primary?.windowDurationMinutes, 300)
+        XCTAssertEqual(parsed.secondary?.remainingPercent, 0)
+
+        let underflow = RateLimitWindow(usedPercent: -12, windowDurationMinutes: nil, resetsAt: nil)
+        XCTAssertEqual(underflow.remainingPercent, 100)
     }
 
     private static let testOfficialApp = OfficialAppInfo(

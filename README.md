@@ -16,7 +16,7 @@ A local macOS menu bar companion that switches between user-owned ChatGPT/Codex 
 - 파일 기반 인증 runtime preflight, keyring 차단과 host-managed 호환 모드
 - 공식 앱 정상 종료·재실행
 - 인증 교체 구간 무변경 검사, 세션 보호 스냅샷과 coordinator 자동 롤백
-- 공식 App Server 기반 현재 `auth.json` 계정 및 프로필별 남은 한도·초기화 시각 표시, 팝오버가 열려 있는 동안 30초 자동 갱신
+- 공식 App Server 기반 현재 `auth.json` 계정 및 프로필별 남은 한도·절대 초기화 일시·초기화권 수량/사용기한 표시, 팝오버가 열려 있는 동안 30초 자동 갱신
 - 같은 task의 대화 맥락과 후속 작업 연속성 검증
 
 ## 빠른 시작

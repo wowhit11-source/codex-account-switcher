@@ -58,17 +58,70 @@ public struct RateLimitWindow: Codable, Equatable, Sendable {
     }
 }
 
+public struct RateLimitResetCredit: Codable, Equatable, Sendable {
+    public var id: String
+    public var resetType: String?
+    public var status: String?
+    public var grantedAt: Date?
+    public var expiresAt: Date?
+    public var title: String?
+    public var description: String?
+
+    public init(
+        id: String,
+        resetType: String? = nil,
+        status: String? = nil,
+        grantedAt: Date? = nil,
+        expiresAt: Date? = nil,
+        title: String? = nil,
+        description: String? = nil
+    ) {
+        self.id = id
+        self.resetType = resetType
+        self.status = status
+        self.grantedAt = grantedAt
+        self.expiresAt = expiresAt
+        self.title = title
+        self.description = description
+    }
+}
+
+public struct RateLimitResetCredits: Codable, Equatable, Sendable {
+    public var availableCount: Int
+    public var credits: [RateLimitResetCredit]?
+
+    public var earliestAvailableExpiration: Date? {
+        credits?
+            .filter { $0.status == nil || $0.status?.caseInsensitiveCompare("available") == .orderedSame }
+            .compactMap(\.expiresAt)
+            .min()
+    }
+
+    public init(availableCount: Int, credits: [RateLimitResetCredit]?) {
+        self.availableCount = max(availableCount, 0)
+        self.credits = credits
+    }
+}
+
 public struct AccountRateLimits: Codable, Equatable, Sendable {
     public var limitID: String?
     public var planType: String?
     public var primary: RateLimitWindow?
     public var secondary: RateLimitWindow?
+    public var resetCredits: RateLimitResetCredits?
 
-    public init(limitID: String?, planType: String?, primary: RateLimitWindow?, secondary: RateLimitWindow?) {
+    public init(
+        limitID: String?,
+        planType: String?,
+        primary: RateLimitWindow?,
+        secondary: RateLimitWindow?,
+        resetCredits: RateLimitResetCredits? = nil
+    ) {
         self.limitID = limitID
         self.planType = planType
         self.primary = primary
         self.secondary = secondary
+        self.resetCredits = resetCredits
     }
 }
 

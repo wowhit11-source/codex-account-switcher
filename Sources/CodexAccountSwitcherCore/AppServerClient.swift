@@ -364,10 +364,19 @@ public struct CodexAppServerClient: Sendable {
         guard let object = result.objectValue else {
             throw SwitcherError.appServer("rateLimits 응답 형식이 올바르지 않습니다")
         }
+        let resetCredits = parseResetCredits(object["rateLimitResetCredits"])
         let rateValue = object["rateLimitsByLimitId"]?.objectValue?["codex"]
             ?? object["rateLimits"]
-        guard let rateValue else { return nil }
-        if rateValue == .null { return nil }
+        guard let rateValue, rateValue != .null else {
+            guard let resetCredits else { return nil }
+            return AccountRateLimits(
+                limitID: nil,
+                planType: nil,
+                primary: nil,
+                secondary: nil,
+                resetCredits: resetCredits
+            )
+        }
         guard let rate = rateValue.objectValue else {
             throw SwitcherError.appServer("rateLimits 본문 형식이 올바르지 않습니다")
         }
@@ -375,7 +384,8 @@ public struct CodexAppServerClient: Sendable {
             limitID: rate["limitId"]?.stringValue,
             planType: rate["planType"]?.stringValue,
             primary: parseWindow(rate["primary"]),
-            secondary: parseWindow(rate["secondary"])
+            secondary: parseWindow(rate["secondary"]),
+            resetCredits: resetCredits
         )
     }
 
@@ -387,6 +397,31 @@ public struct CodexAppServerClient: Sendable {
             windowDurationMinutes: object["windowDurationMins"]?.intValue,
             resetsAt: reset
         )
+    }
+
+    private static func parseResetCredits(_ value: JSONValue?) -> RateLimitResetCredits? {
+        guard let value, value != .null, let object = value.objectValue else { return nil }
+
+        let details: [RateLimitResetCredit]?
+        if object["credits"] == .null || object["credits"] == nil {
+            details = nil
+        } else {
+            details = object["credits"]?.arrayValue?.compactMap { value in
+                guard let credit = value.objectValue, let id = credit["id"]?.stringValue else { return nil }
+                return RateLimitResetCredit(
+                    id: id,
+                    resetType: credit["resetType"]?.stringValue,
+                    status: credit["status"]?.stringValue,
+                    grantedAt: credit["grantedAt"]?.doubleValue.map { Date(timeIntervalSince1970: $0) },
+                    expiresAt: credit["expiresAt"]?.doubleValue.map { Date(timeIntervalSince1970: $0) },
+                    title: credit["title"]?.stringValue,
+                    description: credit["description"]?.stringValue
+                )
+            }
+        }
+
+        guard let availableCount = object["availableCount"]?.intValue ?? details?.count else { return nil }
+        return RateLimitResetCredits(availableCount: availableCount, credits: details)
     }
 }
 

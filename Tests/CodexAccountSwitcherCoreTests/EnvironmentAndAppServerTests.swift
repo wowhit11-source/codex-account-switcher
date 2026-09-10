@@ -387,6 +387,62 @@ final class EnvironmentAndAppServerTests: XCTestCase {
         XCTAssertEqual(underflow.remainingPercent, 100)
     }
 
+    func testRateLimitParsingIncludesResetCreditsAndExpiration() throws {
+        let rates: JSONValue = .object([
+            "rateLimits": .object([
+                "limitId": .string("codex"),
+                "planType": .string("pro"),
+                "primary": .object([
+                    "usedPercent": .number(67),
+                    "windowDurationMins": .number(10_080),
+                    "resetsAt": .number(1_789_435_315)
+                ]),
+                "secondary": .null
+            ]),
+            "rateLimitResetCredits": .object([
+                "availableCount": .number(2),
+                "credits": .array([
+                    .object([
+                        "id": .string("RateLimitResetCredit_1"),
+                        "resetType": .string("codexRateLimits"),
+                        "status": .string("available"),
+                        "grantedAt": .number(1_788_582_053),
+                        "expiresAt": .number(1_791_174_053),
+                        "title": .string("Full reset"),
+                        "description": .string("Reset an eligible Codex limit.")
+                    ])
+                ])
+            ])
+        ])
+
+        let parsed = try XCTUnwrap(CodexAppServerClient.parseRateLimits(rates))
+        XCTAssertEqual(parsed.primary?.windowDurationMinutes, 10_080)
+        XCTAssertEqual(parsed.primary?.resetsAt, Date(timeIntervalSince1970: 1_789_435_315))
+        XCTAssertEqual(parsed.resetCredits?.availableCount, 2)
+        XCTAssertEqual(parsed.resetCredits?.credits?.first?.id, "RateLimitResetCredit_1")
+        XCTAssertEqual(
+            parsed.resetCredits?.earliestAvailableExpiration,
+            Date(timeIntervalSince1970: 1_791_174_053)
+        )
+    }
+
+    func testRateLimitParsingPreservesCountOnlyResetCreditsWithoutWindows() throws {
+        let rates: JSONValue = .object([
+            "rateLimits": .null,
+            "rateLimitResetCredits": .object([
+                "availableCount": .number(3),
+                "credits": .null
+            ])
+        ])
+
+        let parsed = try XCTUnwrap(CodexAppServerClient.parseRateLimits(rates))
+        XCTAssertNil(parsed.primary)
+        XCTAssertNil(parsed.secondary)
+        XCTAssertEqual(parsed.resetCredits?.availableCount, 3)
+        XCTAssertNil(parsed.resetCredits?.credits)
+        XCTAssertNil(parsed.resetCredits?.earliestAvailableExpiration)
+    }
+
     private static let testOfficialApp = OfficialAppInfo(
         path: "/Applications/Codex.app",
         bundleIdentifier: "com.openai.codex",

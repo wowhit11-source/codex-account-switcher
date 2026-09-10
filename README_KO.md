@@ -14,7 +14,7 @@ Codex Account Switcher는 macOS 메뉴바에서 **사용자가 직접 선택한 
 - 현재 설치 환경의 `~/.codex/auth.json` 파일 기반 인증과 권한 `0600` 확인 완료
 - 가짜 `CODEX_HOME`에서 인증만 바꾸는 10회 전환, 공유 상태 해시 불변, 실패 복구 확인 완료
 - 파일 기반 인증을 사용하던 공식 앱에서 실제 두 계정 전환, 앱 재실행, 동일 task 대화 맥락 유지와 후속 코드 작업 확인 완료
-- 전체 자동 테스트 44개 통과
+- 전체 자동 테스트 46개 통과
 
 자세한 실환경 결과는 [환경 진단](docs/ENVIRONMENT_REPORT.md)과 [세션 연속성 보고서](docs/SESSION_CONTINUITY_REPORT.md)를 확인하세요.
 
@@ -80,9 +80,11 @@ open "$HOME/Applications/Codex Account Switcher.app"
 
 ## 사용량 표시
 
-앱은 공식 App Server의 `account/rateLimits/read`가 반환한 Codex bucket을 읽어 `100 - usedPercent`를 남은 비율로 표시합니다. primary/secondary 각각의 `windowDurationMins`로 5시간·7일 같은 창 길이를 표시하고 `resetsAt`으로 초기화까지 남은 시간도 함께 보여줍니다. 새 `rateLimitsByLimitId["codex"]` 응답을 우선 사용하고 기존 단일 `rateLimits` 응답도 지원합니다.
+앱은 공식 App Server의 `account/rateLimits/read`가 반환한 Codex bucket을 읽어 `100 - usedPercent`를 남은 비율로 표시합니다. primary/secondary 각각의 `windowDurationMins`로 5시간·주간 같은 한도 이름을 표시하고 `resetsAt`은 상대 시간이 아닌 로컬 절대 날짜·시각으로 보여줍니다. 새 `rateLimitsByLimitId["codex"]` 응답을 우선 사용하고 기존 단일 `rateLimits` 응답도 지원합니다.
 
-현재 `~/.codex/auth.json` 계정은 공유 `CODEX_HOME`의 새 App Server로 직접 조회해 상단과 일치하는 프로필 행에 한도를 표시합니다. 등록된 나머지 프로필은 공유 홈을 바꾸지 않고 소유자 전용 임시 홈에서 복호화·조회한 뒤 즉시 제거하며, 조회 과정에서 갱신된 인증은 다시 AES-GCM으로 봉인합니다. 공식 앱이 host-managed 인증을 쓰는 경우에도 이 값은 **auth.json 인증 기준**이라고 표시하며 공식 앱 내부 현재 계정과 같다고 주장하지 않습니다. 만료된 프로필은 숫자를 숨기는 대신 `인증 갱신 필요`로 표시합니다. 응답이 없으면 추정값을 만들지 않으며, 이 정보는 표시와 수동 판단에만 사용하고 자동 계정 순환 조건으로 연결하지 않습니다.
+같은 응답의 `rateLimitResetCredits.availableCount`를 초기화권 보유 수량으로 사용합니다. 서버가 개별 내역을 제공하면 사용 가능한 `credits[].expiresAt` 중 가장 빠른 시각을 사용기한으로 표시합니다. 서버가 수량만 제공하면 수량은 표시하되 사용기한은 `미제공`으로 구분하며, 상세 배열 길이로 전체 수량을 추정하지 않습니다.
+
+현재 `~/.codex/auth.json` 계정은 공유 `CODEX_HOME`의 새 App Server로 직접 조회해 상단과 일치하는 프로필 행에 한도를 표시합니다. 등록된 나머지 프로필은 공유 홈을 바꾸지 않고 소유자 전용 임시 홈에서 복호화·조회한 뒤 즉시 제거하며, 조회 과정에서 갱신된 인증은 다시 AES-GCM으로 봉인합니다. 공식 앱이 host-managed 인증을 쓰는 경우에도 이 값은 **auth.json 인증 기준**이라고 표시하며 공식 앱 내부 현재 계정과 같다고 주장하지 않습니다. 만료된 프로필은 숫자를 숨기는 대신 `인증 갱신 필요`로 표시합니다. 요청 실패는 `30초 후 자동 재시도`, 정상 응답에 한도 데이터가 없는 경우는 `서버가 이 계정의 한도 정보를 제공하지 않았습니다`로 구분하며 추정값을 만들지 않습니다. 이 정보는 표시와 수동 판단에만 사용하고 자동 계정 순환 조건으로 연결하지 않습니다.
 
 메뉴바 팝오버를 열면 한도를 즉시 다시 확인하고, 열려 있는 동안 30초마다 현재 `auth.json` 계정과 모든 저장 프로필을 자동 갱신합니다. `Codex 남은 한도` 오른쪽의 시각으로 마지막 완료 시점을 확인할 수 있으며, 팝오버를 닫으면 자동 조회 작업도 중단됩니다. `계정 정보 새로고침`은 환경·계정·프로필 전체를 다시 검사하는 수동 경로로 유지됩니다.
 

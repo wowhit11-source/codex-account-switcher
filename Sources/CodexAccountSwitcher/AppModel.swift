@@ -24,6 +24,7 @@ final class AppModel: ObservableObject {
     @Published var storedAccount: AccountIdentity?
     @Published var accountDisplayMode: AccountDisplayMode = .checking
     @Published var rateLimits: AccountRateLimits?
+    @Published var rateLimitFailure: String?
     @Published var rateLimitProfileID: UUID?
     @Published var profileRateLimits: [UUID: ProfileRateLimitStatus] = [:]
     @Published var profileRateLimitFailures: [UUID: String] = [:]
@@ -60,6 +61,7 @@ final class AppModel: ObservableObject {
         currentAccount = nil
         storedAccount = nil
         rateLimits = nil
+        rateLimitFailure = nil
         rateLimitProfileID = nil
         profileRateLimits = [:]
         profileRateLimitFailures = [:]
@@ -80,7 +82,16 @@ final class AppModel: ObservableObject {
                 let identity = try await client.readAccount(refreshToken: false)
                 storedAccount = identity
                 currentAccount = identity
-                rateLimits = try? await client.readRateLimits()
+                do {
+                    rateLimits = try await client.readRateLimits()
+                    rateLimitFailure = rateLimits == nil
+                        ? rateLimitUnavailableMessage(for: identity, requestFailed: false)
+                        : nil
+                } catch {
+                    rateLimits = nil
+                    rateLimitFailure = rateLimitUnavailableMessage(for: identity, requestFailed: true)
+                    SecureLogger.error("account/rateLimits/read 실패: \(Redactor.redact(error.localizedDescription))")
+                }
                 usage = try? await client.readUsage()
                 accountDisplayMode = .storedAuthentication
                 if let identity {
@@ -330,6 +341,7 @@ final class AppModel: ObservableObject {
                     currentAccount = nil
                     storedAccount = nil
                     rateLimits = nil
+                    rateLimitFailure = nil
                     rateLimitProfileID = nil
                     usage = nil
                     accountDisplayMode = .officialHostManaged
@@ -362,6 +374,7 @@ final class AppModel: ObservableObject {
                 storedAccount = nil
                 accountDisplayMode = .officialHostManaged
                 rateLimits = nil
+                rateLimitFailure = nil
                 rateLimitProfileID = nil
                 statusMessage = "공식 앱에서 원하는 계정으로 직접 로그인한 뒤 새로고침하세요"
             } catch {
@@ -484,6 +497,7 @@ final class AppModel: ObservableObject {
                 if rateLimitProfileID == profile.id {
                     rateLimitProfileID = nil
                     rateLimits = nil
+                    rateLimitFailure = nil
                 }
                 statusMessage = "프로필을 삭제했습니다"
             } catch {
@@ -538,6 +552,9 @@ final class AppModel: ObservableObject {
                 storedAccount = result.account
                 accountDisplayMode = .switchVerified
                 rateLimits = result.rateLimits
+                rateLimitFailure = result.rateLimits == nil
+                    ? rateLimitUnavailableMessage(for: result.account, requestFailed: false)
+                    : nil
                 rateLimitProfileID = profile.id
                 if let limits = result.rateLimits {
                     profileRateLimits[profile.id] = ProfileRateLimitStatus(
@@ -680,9 +697,13 @@ final class AppModel: ObservableObject {
                     checkedAt: result.checkedAt
                 )
             } else if let result {
-                failures[profileID] = "한도 응답 없음"
-                if let errorMessage = result.rateLimitErrorDescription {
-                    SecureLogger.error("저장 프로필 한도 응답 실패 id=\(profileID.uuidString) error=\(errorMessage)")
+                let requestFailed = result.rateLimitErrorDescription != nil
+                failures[profileID] = rateLimitUnavailableMessage(
+                    for: result.account,
+                    requestFailed: requestFailed
+                )
+                if let rateLimitError = result.rateLimitErrorDescription {
+                    SecureLogger.error("저장 프로필 한도 응답 실패 id=\(profileID.uuidString) error=\(rateLimitError)")
                 }
             } else if let errorMessage {
                 failures[profileID] = "인증 갱신 필요"
@@ -721,6 +742,7 @@ final class AppModel: ObservableObject {
             account = refreshedAccount
             authenticationFileLimits = try await client.readRateLimits()
         } catch {
+            rateLimitFailure = rateLimitUnavailableMessage(for: storedAccount, requestFailed: true)
             SecureLogger.error("auth.json 계정 한도 새로고침 실패: \(Redactor.redact(error.localizedDescription))")
             return
         }
@@ -730,6 +752,9 @@ final class AppModel: ObservableObject {
             currentAccount = account
         }
         rateLimits = authenticationFileLimits
+        rateLimitFailure = authenticationFileLimits == nil
+            ? rateLimitUnavailableMessage(for: account, requestFailed: false)
+            : nil
         rateLimitProfileID = nil
 
         guard
@@ -746,6 +771,20 @@ final class AppModel: ObservableObject {
         )
         profileRateLimitFailures[profile.id] = nil
         SecureLogger.info("auth.json 계정 한도 조회 성공 profile=\(profile.id.uuidString)")
+    }
+
+    private func rateLimitUnavailableMessage(
+        for account: AccountIdentity?,
+        requestFailed: Bool
+    ) -> String {
+        switch account?.type.lowercased() {
+        case "apikey", "amazonbedrock":
+            return "ChatGPT 한도 조회 대상이 아닌 인증입니다"
+        default:
+            return requestFailed
+                ? "한도 조회 실패 · 30초 후 자동 재시도"
+                : "서버가 이 계정의 한도 정보를 제공하지 않았습니다"
+        }
     }
 
     private func binaryURL(from report: EnvironmentReport) -> URL? {

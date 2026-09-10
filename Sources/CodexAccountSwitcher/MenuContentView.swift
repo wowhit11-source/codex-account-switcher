@@ -109,16 +109,29 @@ struct MenuContentView: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
-            if let primary = model.rateLimits?.primary {
+            if let limits = model.rateLimits {
                 if model.environment?.officialAppAuthenticationMode == .hostManaged {
                     Text(usageReferenceText)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                rateLimitWindow(primary, fallbackName: "단기")
-                if let secondary = model.rateLimits?.secondary {
+                if let primary = limits.primary {
+                    rateLimitWindow(primary, fallbackName: "단기")
+                }
+                if let secondary = limits.secondary {
                     rateLimitWindow(secondary, fallbackName: "장기")
+                }
+                if limits.primary == nil, limits.secondary == nil {
+                    Text("서버가 한도 사용률은 제공하지 않았습니다")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let resetCredits = limits.resetCredits {
+                    Label(resetCreditSummary(resetCredits), systemImage: "arrow.counterclockwise.circle")
+                        .font(.caption)
+                        .foregroundStyle(.purple)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } else if model.accountDisplayMode == .officialHostManaged,
                       !model.profileRateLimits.isEmpty {
@@ -126,7 +139,9 @@ struct MenuContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text("남은 한도 정보 없음").font(.caption).foregroundStyle(.secondary)
+                Text(model.rateLimitFailure ?? "남은 한도 정보 없음")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -148,7 +163,7 @@ struct MenuContentView: View {
                 Text("\(windowName(window, fallback: fallbackName)) \(window.remainingPercent, specifier: "%.0f")% 남음")
                 Spacer()
                 if let reset = window.resetsAt {
-                    Text("초기화 \(reset, style: .relative)")
+                    Text("\(quotaDate(reset)) 초기화")
                 }
             }
             .font(.caption)
@@ -247,15 +262,22 @@ struct MenuContentView: View {
 
     private func profileRateLimitSummary(_ profile: AccountProfile) -> String? {
         guard let limits = model.profileRateLimits[profile.id]?.rateLimits else { return nil }
-        let windows = [
+        var lines = [
             limits.primary.map { compactWindow($0, fallback: "단기") },
             limits.secondary.map { compactWindow($0, fallback: "장기") }
         ].compactMap { $0 }
-        return windows.isEmpty ? nil : windows.joined(separator: " · ")
+        if let resetCredits = limits.resetCredits {
+            lines.append(resetCreditSummary(resetCredits))
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
     private func compactWindow(_ window: RateLimitWindow, fallback: String) -> String {
-        "\(windowName(window, fallback: fallback).replacingOccurrences(of: " 창", with: "")) \(Int(window.remainingPercent.rounded()))% 남음"
+        var summary = "\(windowName(window, fallback: fallback)) \(Int(window.remainingPercent.rounded()))% 남음"
+        if let reset = window.resetsAt {
+            summary += " · \(quotaDate(reset)) 초기화"
+        }
+        return summary
     }
 
     private func windowName(_ window: RateLimitWindow, fallback: String) -> String {
@@ -263,15 +285,30 @@ struct MenuContentView: View {
             return "\(fallback) 한도"
         }
         if minutes.isMultiple(of: 10_080) {
-            return "\(minutes / 10_080)주 창"
+            let weeks = minutes / 10_080
+            return weeks == 1 ? "주간 한도" : "\(weeks)주 한도"
         }
         if minutes.isMultiple(of: 1_440) {
-            return "\(minutes / 1_440)일 창"
+            return "\(minutes / 1_440)일 한도"
         }
         if minutes.isMultiple(of: 60) {
-            return "\(minutes / 60)시간 창"
+            return "\(minutes / 60)시간 한도"
         }
-        return "\(minutes)분 창"
+        return "\(minutes)분 한도"
+    }
+
+    private func resetCreditSummary(_ resetCredits: RateLimitResetCredits) -> String {
+        let count = resetCredits.availableCount
+        guard count > 0 else { return "초기화권 0장" }
+        guard let expiration = resetCredits.earliestAvailableExpiration else {
+            return "초기화권 \(count)장 · 사용기한 미제공"
+        }
+        let expirationLabel = count == 1 ? "사용기한" : "가장 빠른 사용기한"
+        return "초기화권 \(count)장 · \(expirationLabel) \(quotaDate(expiration))"
+    }
+
+    private func quotaDate(_ date: Date) -> String {
+        date.formatted(.dateTime.month().day().weekday(.abbreviated).hour().minute())
     }
 
     private var controls: some View {

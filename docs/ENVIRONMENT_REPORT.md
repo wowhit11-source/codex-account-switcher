@@ -22,7 +22,7 @@
 | 메서드 | 공개 가능한 결과 |
 |---|---|
 | `account/read(refreshToken: false)` | ChatGPT 관리형 계정, 마스킹 이메일과 plan type 반환 |
-| `account/rateLimits/read` | Codex bucket의 primary/secondary 사용률, 창 길이와 초기화 시각 반환 |
+| `account/rateLimits/read` | Codex bucket의 사용률·창 길이·절대 초기화 시각과 제공되는 경우 초기화권 수량·만료 시각 반환 |
 | `account/usage/read` | 지원되는 환경에서 활동 summary 반환 |
 
 앱은 허용된 필드만 파싱하고 이메일은 일반 로그에 기록하기 전에 마스킹합니다. 계정별 사용량 숫자는 이 공개 문서에 저장하지 않습니다.
@@ -59,7 +59,7 @@
 | AES-GCM 암호화 프로필 | 사용 가능 |
 | Keychain 256비트 키 | 사용 가능 |
 | 프로세스 단위 Keychain 키 캐시 | 사용 가능 |
-| 현재 인증·프로필별 남은 한도 표시 | 공유 `auth.json` 계정과 격리된 임시 `CODEX_HOME`의 App Server 응답이 있는 경우 사용 가능; 팝오버 열림 중 30초 자동 갱신; 만료 프로필은 갱신 필요 표시 |
+| 현재 인증·프로필별 남은 한도 표시 | 공유 `auth.json` 계정과 격리된 임시 `CODEX_HOME`의 App Server 응답이 있는 경우 사용 가능; 절대 초기화 일시와 초기화권 수량/사용기한 표시; 팝오버 열림 중 30초 자동 갱신; 만료 프로필은 갱신 필요 표시 |
 | 인증만 교체하고 로컬 상태 공유 | 자동 테스트와 실제 전환에서 확인 |
 | 동일 task 후속 작업 | 실제 두 계정 전환에서 확인 |
 
@@ -69,7 +69,7 @@
 
 | 검증 | 결과 |
 |---|---|
-| `scripts/test.sh` | 44 tests, 0 failures |
+| `scripts/test.sh` | 46 tests, 0 failures |
 | 가짜 `CODEX_HOME` 10회 전환 | 통과 |
 | coordinator 대상 검증·재실행·세션 삭제 실패 자동 롤백 | 통과 |
 | 대상 적용 검증의 중복 refresh 금지 회귀 테스트 | 통과 |
